@@ -104,6 +104,40 @@ test('the stop time outranks a stall, so the return-the-ticket reminder still fi
   assert.equal(D.watchdogVerdict(st, NOW, { hasArmedTab: false }).action, 'stop-time');
 });
 
+// --- the poll clock ---------------------------------------------------------
+
+test('the poll delay stays inside the configured window', () => {
+  for (const r of [0, 0.25, 0.5, 0.75, 1]) {
+    const d = D.nextPollDelay(r);
+    assert.ok(d >= D.POLL_MIN_MS && d <= D.POLL_MAX_MS, r + ' gave ' + d);
+  }
+});
+
+test('the poll delay never asks for less than Chrome will honour', () => {
+  // Alarms are clamped to 30s. Scheduling below that does not fail, it just
+  // silently becomes 30s -- so the configured range must not pretend to be
+  // faster than the clock actually is.
+  assert.ok(D.POLL_MIN_MS >= D.ALARM_FLOOR_MS, 'the range must start at or above the alarm floor');
+  for (const r of [0, 0.5, 1]) {
+    assert.ok(D.nextPollDelay(r) >= D.ALARM_FLOOR_MS);
+  }
+});
+
+test('the poll delay is actually jittered', () => {
+  assert.notEqual(D.nextPollDelay(0), D.nextPollDelay(1));
+});
+
+test('the stall threshold leaves room for several real cycles', () => {
+  // A cycle is the poll delay plus a page load plus up to 8s of waiting for the
+  // seat search. If STALL_MS ever drops near that, the watchdog reloads the tab
+  // out from under a probe that is still working.
+  const worstCycle = D.POLL_MAX_MS + 8000 + 5000;
+  assert.ok(
+    D.STALL_MS >= worstCycle * 2.5,
+    'STALL_MS ' + D.STALL_MS + ' is too tight for a worst-case cycle of ' + worstCycle
+  );
+});
+
 // --- claim detection, pure --------------------------------------------------
 
 const ctl = (over) =>

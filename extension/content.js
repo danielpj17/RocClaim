@@ -6,17 +6,15 @@
 // be cleared -- the browser is flagged before the challenge is even shown.
 // Your own Chrome is not flagged. So the watcher moved in here.
 //
-// It does exactly what you were doing by hand: reload one page every 8-12
-// seconds and look at it. It does not click anything.
+// It does exactly what you do by hand on the ticket page: set the quantity to
+// 1, run the seat search, and read whether "Seats Not Found" comes back. That
+// means it DOES click -- three allowlisted controls, and never past the search.
+// See probe-dom.js for that boundary.
 //
-// The decisions all live in detect.js, which loads first and is testable
-// outside a browser. This file is the part that touches the page and the
-// clock.
-
-// A seat search is a heavier, write-ish action than a page reload, so this is
-// slower than the 8-12s the reload-only build used. See CLAUDE.md section 0.5.
-const POLL_MIN_MS = 20000;
-const POLL_MAX_MS = 30000;
+// The decisions all live in detect.js and probe-dom.js, both testable outside a
+// browser. This file is the part that touches the page. It does not own the
+// clock: the next cycle is booked with the service worker, because Chrome
+// throttles timers in tabs nobody is looking at.
 
 // How many probes in a row may come back "I could not tell" before giving up.
 // Without this a broken selector probes nothing for thirty hours while the
@@ -38,8 +36,11 @@ const send = (msg) =>
 const get = (keys) => new Promise((r) => chrome.storage.local.get(keys, r));
 const set = (obj) => new Promise((r) => chrome.storage.local.set(obj, r));
 
-function jitter() {
-  return Math.round(POLL_MIN_MS + Math.random() * (POLL_MAX_MS - POLL_MIN_MS));
+// The next cycle is booked with the service worker rather than a setTimeout
+// here: Chrome throttles timers in hidden tabs, and an unattended watch runs in
+// a tab nobody is looking at. See nextPollDelay() in detect.js.
+function scheduleNext() {
+  return send({ type: 'schedule-poll' });
 }
 
 async function stop(reason) {
@@ -60,7 +61,7 @@ async function runProbe(st, polls) {
   if (result.state === 'unavailable') {
     // The expected answer, most of the time. Reset the streak and go again.
     await set({ unknownStreak: 0, lastResult: 'no seats', lastResultAt: Date.now() });
-    setTimeout(() => location.reload(), jitter());
+    await scheduleNext();
     return;
   }
 
@@ -121,7 +122,7 @@ async function runProbe(st, polls) {
     return;
   }
 
-  setTimeout(() => location.reload(), jitter());
+  await scheduleNext();
 }
 
 (async function main() {
@@ -263,5 +264,5 @@ async function runProbe(st, polls) {
     });
   }
 
-  setTimeout(() => location.reload(), jitter());
+  await scheduleNext();
 })();

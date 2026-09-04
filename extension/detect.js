@@ -178,9 +178,33 @@ var ROCDetect = (function () {
   // still reading WATCHING. This is the decision half of the watchdog that
   // catches that; background.js is only the hands.
   //
-  // A cycle is 20-30s of wait, plus the page load, plus up to 8s for the seat
-  // search to answer -- call it 40s at the slow end. The threshold is about
-  // four of those: long enough that one slow cycle is not mistaken for death,
+  // Scheduling lives in the service worker's alarm, not in a page setTimeout.
+  //
+  // Chrome intensively throttles timers in hidden tabs -- after about five
+  // minutes hidden they run roughly once a minute -- and the entire poll loop
+  // used to hang off one setTimeout in the page. On an unattended overnight
+  // watch, where that tab is by definition not the one being looked at, the
+  // cadence would have quietly halved with nothing to signal it: STALL_MS is
+  // long enough that a 60s cycle still reads as perfectly healthy. Alarms are
+  // not subject to tab throttling, so the cadence holds regardless of what is
+  // on screen.
+  //
+  // The cost is Chrome's 30-second floor on alarms. Scheduling anything below
+  // that silently becomes 30s, so the range starts at the floor rather than
+  // pretending to be faster than it is.
+  const ALARM_FLOOR_MS = 30000;
+  const POLL_MIN_MS = 30000;
+  const POLL_MAX_MS = 45000;
+
+  function nextPollDelay(rand) {
+    const r = typeof rand === 'number' ? rand : Math.random();
+    const spread = POLL_MAX_MS - POLL_MIN_MS;
+    return Math.max(ALARM_FLOOR_MS, Math.round(POLL_MIN_MS + r * spread));
+  }
+
+  // A cycle is 30-45s of wait, plus the page load, plus up to 8s for the seat
+  // search to answer -- call it 60s at the slow end. The threshold is about
+  // three of those: long enough that one slow cycle is not mistaken for death,
   // short enough to find out in minutes.
   //
   // Keep this in step with the poll interval in content.js. It was 90s while
@@ -225,6 +249,10 @@ var ROCDetect = (function () {
     NAV_SELECTOR,
     CONTROL_SELECTOR,
     STALL_MS,
+    ALARM_FLOOR_MS,
+    POLL_MIN_MS,
+    POLL_MAX_MS,
+    nextPollDelay,
     scanControls,
     isUsable,
     isClaimLike,

@@ -4,9 +4,12 @@
 // script's fetch is bound by the page's CORS rules, while the worker's is
 // governed by the extension's host_permissions.
 //
-// The watchdog exists because the poll loop has exactly one thread holding it
-// together -- each page load schedules the next reload. Any load that does not
-// run the content script (a network blip serving a Chrome error page, a
+// This worker also owns the poll clock. Each page load asks it to book the next
+// cycle, and an alarm reloads the tab when that comes due.
+//
+// The watchdog exists because the loop still has one thread holding it together
+// -- a cycle that never completes never books the next one. Any load that does
+// not run the content script (a network blip serving a Chrome error page, a
 // redirect off the armed URL, the tab being closed) ends the watch for good,
 // silently, with the popup still reading WATCHING. That is the failure that
 // turns a six-hour unattended watch into nothing, and you would not find out
@@ -17,6 +20,12 @@ importScripts('detect.js');
 
 const DEFAULT_SERVER = 'https://ntfy.sh';
 const WATCHDOG_ALARM = 'roc-watchdog';
+
+// The poll clock. This lives here rather than as a setTimeout in the page
+// because Chrome intensively throttles timers in hidden tabs, and an
+// unattended watch is by definition running in a tab nobody is looking at.
+// See the note on nextPollDelay() in detect.js.
+const POLL_ALARM = 'roc-next-poll';
 
 // Chrome clamps alarm periods; 0.5 is the floor it honours. The stall
 // threshold in detect.js is what actually decides, so checking often is only
@@ -86,10 +95,48 @@ async function notify(msg) {
 }
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
-  if (!msg || msg.type !== 'notify') return;
-  notify(msg).then(sendResponse);
-  return true; // keep the message channel open for the async reply
+  if (!msg) return;
+
+  if (msg.type === 'notify') {
+    notify(msg).then(sendResponse);
+    return true; // keep the message channel open for the async reply
+  }
+
+  // The page has finished a cycle and wants the next one booked.
+  if (msg.type === 'schedule-poll') {
+    schedulePoll().then(sendResponse);
+    return true;
+  }
 });
+
+async function schedulePoll() {
+  const { enabled } = await get(['enabled']);
+  if (!enabled) return { scheduled: false, reason: 'not watching' };
+  const delay = ROCDetect.nextPollDelay();
+  await chrome.alarms.create(POLL_ALARM, { when: Date.now() + delay });
+  await set({ nextPollAt: Date.now() + delay });
+  return { scheduled: true, delay };
+}
+
+async function runPoll() {
+  const st = await get(['enabled', 'targetUrl']);
+  if (!st.enabled) {
+    await chrome.alarms.clear(POLL_ALARM);
+    return;
+  }
+  const tab = await findArmedTab(st.targetUrl);
+  if (!tab) {
+    // Leave this to the watchdog, which owns the "tab is gone" story and its
+    // notification. Saying it twice, from two places, is how you end up with
+    // two different explanations for one problem.
+    return;
+  }
+  try {
+    await chrome.tabs.reload(tab.id);
+  } catch (err) {
+    await logLine('poll reload failed: ' + err.message);
+  }
+}
 
 // --- watchdog ---------------------------------------------------------------
 
@@ -98,7 +145,11 @@ async function syncAlarm() {
   if (enabled) {
     chrome.alarms.create(WATCHDOG_ALARM, { periodInMinutes: WATCHDOG_PERIOD_MIN });
   } else {
+    // Both clocks stop together. A poll alarm outliving the watch would reload
+    // his tab out of nowhere, minutes after he pressed Stop.
     await chrome.alarms.clear(WATCHDOG_ALARM);
+    await chrome.alarms.clear(POLL_ALARM);
+    await set({ nextPollAt: null });
   }
 }
 
@@ -194,6 +245,7 @@ async function runWatchdog() {
 
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === WATCHDOG_ALARM) runWatchdog();
+  if (alarm.name === POLL_ALARM) runPoll();
 });
 
 // Arm and disarm the alarm from the state itself, so every path that starts or
