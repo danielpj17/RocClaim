@@ -49,6 +49,84 @@ section 11.
 
 ---
 
+## 0.5. READ THIS SECOND — availability is NOT in the DOM (2026-09-04)
+
+Daniel sent screenshots of the real claim flow. They invalidate the detection
+model that both the Playwright build and the extension were built around, so
+read this before touching any detector.
+
+**The actual flow, from his own logged-in Chrome:**
+
+1. `/students/events/STFB` lists events. The live one (`BYU vs Utah Tech`)
+   shows an `ALMOST GONE` badge and a blue **"Buy Now"** button. A future one
+   shows `COMING SOON` and `Onsale Starts in 4 Days`.
+2. "Buy Now" goes to **`/students/event/F26/E01`** — "Select Your Tickets",
+   Zones `ROC - GA`, Quantity `Maximum of 1`, a `Student Entry Group 4` row
+   with a `- 0 +` stepper, and **`$0.00/ea`**.
+3. With quantity 0 the primary button is disabled and reads **"No Tickets
+   Selected"**. Clicking `+` sets it to 1 and the button becomes
+   **"Find Best Available"**.
+4. Clicking that returns either a modal — **"Seats Not Found" / "There were no
+   seats that matched your preferences."** with an **OK** button — or a seat.
+5. He then reloads and repeats from step 2.
+
+**The consequence, and it is the whole ballgame: the page looks identical
+whether or not a ticket exists.** Availability is not rendered anywhere. It is
+only discoverable by *performing the search and reading the result*.
+
+So **reload-and-scan detection cannot work on this site**, and the extension as
+written is a silent no-op on both pages:
+
+- Armed on the STFB listing → "Buy Now" is present at arm time, gets recorded
+  by the arm-time baseline as furniture, and is ignored forever.
+- Armed on the event page → nothing ever matches `CLAIMABLE_LABEL`
+  (`buy|claim|accept|get ticket|select ticket` — "Find Best Available" matches
+  none of them), and the page fingerprint is byte-stable across reloads, so not
+  even a "page changed" push fires.
+
+Neither would have notified him, ever, and the watchdog would not have caught
+it: the poll loop runs perfectly, it is just watching for something that never
+happens. **A green watchdog is not evidence the detector is aimed at anything.**
+
+**The detector has to be a probe loop**, mirroring what he does by hand: load
+the page → click `+` → click "Find Best Available" → read the outcome →
+"Seats Not Found" means keep going, anything else means stop and shout.
+
+What the screenshots confirm and settle:
+
+- `$0.00/ea` in zone `ROC - GA`, max 1. That is the affirmative free evidence
+  the two-tier price gate in `claim.js` (section 5) requires. The gate design
+  holds up; keep it.
+- The event URL shape is `/students/event/<SEASON>/<EVENT>`, e.g. `F26/E01`.
+  That is *not* the same as the listing URL `/students/events/<SPORT>`.
+
+**Section 0 over-generalized.** PerimeterX blocks *automated browsers*; it does
+not stop Daniel pressing Ctrl+S or opening DevTools in his own Chrome. The
+recon section 7 wanted has been obtainable by hand the whole time. Do not
+repeat the claim that the page "can never" be captured.
+
+**Decided 2026-09-04, with Daniel:**
+
+- **Capture the network call before writing the detector.** "Find Best
+  Available" is an XHR; its request and its two response shapes (no-seats vs
+  seat-found) are what the watcher should poll directly. `tools/read-har.js`
+  reads a DevTools HAR and prints the interesting calls with cookies, tokens
+  and auth headers redacted. HARs go in `recon/` and are git-ignored — a HAR
+  saved "with content" carries a live session; never commit one.
+- **Poll at 20-30s, not 8-12s** (`config.json` updated). A seat search is a
+  heavier, write-ish action than a page reload: 8-12s over a 30-hour football
+  window is ~13,000 seat searches against their system versus a couple hundred
+  when he does it by hand. Section 5's reasoning about not getting flagged
+  applies harder here than it did to reloading. A returned ticket sits in
+  inventory until someone takes it; it does not evaporate in ten seconds.
+
+**Still unknown:** what the page does when a seat *is* found — whether "Find
+Best Available" puts it in a cart with a hold timer. That decides whether
+stopping there and pushing him is already most of a claim. Ask before building
+the auto-click.
+
+---
+
 ## 1. What this is
 
 A watcher that monitors the BYU ROC **last-chance / returned-ticket** claim and
@@ -228,8 +306,11 @@ logs/          git-ignored: server/tunnel/recon output, pids, tunnel.url
 - [ ] ~~Availability detector against the real page~~ — **blocked by
       PerimeterX, see section 0. Not doable via Playwright.**
 - [ ] ~~Pointing the claim at the real page~~ — same blocker.
-- [ ] Auto-click in the extension — deferred by Daniel until the notify-only
-      build has survived one real onsale.
+- [ ] **Rebuild detection as a probe loop — see section 0.5.** The current
+      reload-and-scan detector cannot see availability on this site at all.
+- [ ] Capture the "Find Best Available" XHR (`tools/read-har.js`), then point
+      the watcher at it directly.
+- [ ] Auto-click — blocked on knowing what a successful seat search shows.
 
 `npm install` and `npx playwright install chromium` have both been run on this
 machine. `npm test` passes (81 tests, 26 of them driving real headless

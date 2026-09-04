@@ -1,7 +1,7 @@
 {
   "port": 4321,
-  "pollMinMs": 8000,
-  "pollMaxMs": 12000,
+  "pollMinMs": 20000,
+  "pollMaxMs": 30000,
   "dryRun": true,
   "startUrl": "https://byutickets.evenue.net/students",
   "notify": {
