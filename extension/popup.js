@@ -79,6 +79,11 @@ $('start').addEventListener('click', async () => {
     // "armed a second ago" from "armed an hour ago and the script never ran".
     armedAt: Date.now(),
     recoveryAt: null,
+    // Probe = run the seat search and read the answer. See CLAUDE.md 0.5.
+    strategy: 'probe',
+    unknownStreak: 0,
+    lastResult: null,
+    lastResultAt: null,
   });
 
   // The content script only acts on load, so kick the first one off.

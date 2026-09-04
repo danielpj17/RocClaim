@@ -120,6 +120,57 @@ repeat the claim that the page "can never" be captured.
   applies harder here than it did to reloading. A returned ticket sits in
   inventory until someone takes it; it does not evaporate in ten seconds.
 
+## 0.6. The DOM probe (built 2026-09-04, deliberately scrappable)
+
+`extension/probe-dom.js` is the detector section 0.5 calls for. It is built
+from screenshots, not captured DOM, and is **expected to be replaced** by an
+API detector once the seat-search XHR is captured. It is therefore isolated:
+everything site-specific is in one `SELECTORS` block, nothing outside the file
+knows how detection works, and removing it is three deletions -- the file, its
+line in `manifest.json`, and the `'probe'` case in `content.js`.
+
+Detection is now a named strategy in storage:
+
+- `strategy: 'probe'` (default) -- run the seat search and read the answer.
+- `strategy: 'watch'` -- the original reload-and-scan. Useless on the event
+  page, but still the right shape for the **listing** page, where COMING SOON
+  becoming live *is* a rendered change. Kept for that, and still tested.
+
+**The boundary, and it is not negotiable: it clicks to ask, never to claim.**
+It touches exactly three controls, all allowlisted -- the quantity `+`, the
+"Find Best Available" button, and the `OK` that dismisses the failure modal.
+The moment the answer is anything but "no seats" it stops and hands the page
+over untouched. A test asserts a found seat leaves the Checkout button
+unclicked. It must stay that way until Daniel explicitly arms an auto-claim.
+
+Two rules worth not "simplifying":
+
+- **"Nothing happened" is `unknown`, never `unavailable`.** If the click
+  produced no visible response we do not know the answer, and reporting a
+  comfortable "no seats" is exactly how a broken selector becomes thirty silent
+  hours. Five unknowns in a row stops the watch with a loud push. The watchdog
+  cannot catch this case -- the loop is running perfectly, it is just blind --
+  which is the same lesson as section 0.5.
+- **The free-ticket gate runs before every click**, on the live page, not just
+  at scan time. Same rule as `claim.js`: absence of a price is not evidence of
+  free. A page showing a real amount refuses without touching anything.
+
+`STALL_MS` in `detect.js` must stay in step with the poll interval in
+`content.js`. It was 90s when the loop polled at 8-12s; when the interval went
+to 20-30s that became about two cycles instead of four, and the watchdog would
+have reloaded the tab out from under a probe still waiting for its answer. It
+is 180s now.
+
+**Tested:** `test/probe-dom.test.js`, 13 tests driving a replica of the real
+page rebuilt from the screenshots, plus 10 end-to-end checks in real Chrome
+with the extension loaded (no seats keeps cycling; a found seat stops with an
+urgent push and leaves Checkout unclicked; a dead search button gives up loudly
+instead of reporting a fake "no seats"). **The replica proves the probe does
+the right thing given that page shape. It cannot prove the shape is right** --
+only the HAR or a saved page can.
+
+---
+
 **Still unknown:** what the page does when a seat *is* found — whether "Find
 Best Available" puts it in a cart with a hold timer. That decides whether
 stopping there and pushing him is already most of a claim. Ask before building
@@ -306,8 +357,7 @@ logs/          git-ignored: server/tunnel/recon output, pids, tunnel.url
 - [ ] ~~Availability detector against the real page~~ — **blocked by
       PerimeterX, see section 0. Not doable via Playwright.**
 - [ ] ~~Pointing the claim at the real page~~ — same blocker.
-- [ ] **Rebuild detection as a probe loop — see section 0.5.** The current
-      reload-and-scan detector cannot see availability on this site at all.
+- [x] Rebuild detection as a probe loop — `extension/probe-dom.js`, section 0.6
 - [ ] Capture the "Find Best Available" XHR (`tools/read-har.js`), then point
       the watcher at it directly.
 - [ ] Auto-click — blocked on knowing what a successful seat search shows.
@@ -730,7 +780,7 @@ countdown is not a change, "COMING SOON" becoming "Buy" *is*, and
 
 ## 13. Test suite
 
-**81 tests, all passing** (`npm test`), 26 of them driving real headless
+**94 tests, all passing** (`npm test`), 39 of them driving real headless
 Chromium against real DOM.
 
 - `test/watcher.test.js` — 16, fake clock, no network

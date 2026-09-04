@@ -13,8 +13,15 @@
 // outside a browser. This file is the part that touches the page and the
 // clock.
 
-const POLL_MIN_MS = 8000;
-const POLL_MAX_MS = 12000;
+// A seat search is a heavier, write-ish action than a page reload, so this is
+// slower than the 8-12s the reload-only build used. See CLAUDE.md section 0.5.
+const POLL_MIN_MS = 20000;
+const POLL_MAX_MS = 30000;
+
+// How many probes in a row may come back "I could not tell" before giving up.
+// Without this a broken selector probes nothing for thirty hours while the
+// watchdog reports a perfectly healthy loop.
+const MAX_UNKNOWN_STREAK = 5;
 
 const send = (msg) =>
   new Promise((resolve) => {
@@ -39,6 +46,84 @@ async function stop(reason) {
   await set({ enabled: false, stoppedReason: reason, stoppedAt: Date.now() });
 }
 
+// One probe cycle, plus what each answer means. Kept out of main() so the
+// strategy reads as one unit.
+async function runProbe(st, polls) {
+  const D = ROCDetect;
+  const fp = (s) => D.hash(D.normalize(s));
+
+  const result = await ROCProbeDom.runCycle({
+    fingerprint: fp,
+    log: (line) => void line,
+  });
+
+  if (result.state === 'unavailable') {
+    // The expected answer, most of the time. Reset the streak and go again.
+    await set({ unknownStreak: 0, lastResult: 'no seats', lastResultAt: Date.now() });
+    setTimeout(() => location.reload(), jitter());
+    return;
+  }
+
+  if (result.state === 'available') {
+    // Stop immediately. The page is left exactly as the search left it, so he
+    // takes over from wherever it got to -- this never clicks past the search.
+    await stop('the seat search found something');
+    await set({ lastResult: 'SEATS FOUND', lastResultAt: Date.now() });
+    await send({
+      type: 'notify',
+      title: 'ROC SEAT FOUND -- GO NOW',
+      message:
+        'The seat search came back with something other than "Seats Not Found" after ' +
+        polls + ' checks.\n\n' + result.detail + '\n\n' +
+        'The watch has STOPPED and the page has been left exactly where the search ' +
+        'put it. Nothing past the search was clicked -- finish the claim yourself.\n' +
+        location.href,
+      priority: 'urgent',
+    });
+    return;
+  }
+
+  if (result.state === 'refused') {
+    // The price gate or the allowlist tripped. That means the page is not the
+    // one we think it is, and continuing would be clicking blind.
+    await stop('the probe refused to act: ' + result.detail);
+    await set({ lastResult: 'refused', lastResultAt: Date.now() });
+    await send({
+      type: 'notify',
+      title: 'ROC watch STOPPED -- refused to click',
+      message:
+        'The probe would not run the seat search and has stopped watching:\n\n' +
+        result.detail + '\n\n' +
+        'This usually means the page is not the free ROC claim it expected. Check it ' +
+        'by hand.\n' + location.href,
+      priority: 'high',
+    });
+    return;
+  }
+
+  // 'unknown' -- the click produced no visible response, so we genuinely do not
+  // know. A few in a row is a broken selector, not bad luck, and the watchdog
+  // will not catch it because the loop is running fine.
+  const streak = (Number(st.unknownStreak) || 0) + 1;
+  await set({ unknownStreak: streak, lastResult: 'unclear: ' + result.detail, lastResultAt: Date.now() });
+
+  if (streak >= MAX_UNKNOWN_STREAK) {
+    await stop('the probe could not read the page ' + streak + ' times running');
+    await send({
+      type: 'notify',
+      title: 'ROC watch STOPPED -- probe is blind',
+      message:
+        'The seat search produced no readable answer ' + streak + ' times in a row, so ' +
+        'the watch stopped rather than pretend it is working.\n\n' + result.detail + '\n\n' +
+        'It is NOT watching. The page layout has probably changed.\n' + location.href,
+      priority: 'high',
+    });
+    return;
+  }
+
+  setTimeout(() => location.reload(), jitter());
+}
+
 (async function main() {
   const D = ROCDetect;
 
@@ -50,6 +135,8 @@ async function stop(reason) {
     'claimBaseline',
     'polls',
     'topic',
+    'strategy',
+    'unknownStreak',
   ]);
 
   if (!st.enabled) return;
@@ -91,6 +178,16 @@ async function stop(reason) {
         'watch stopped. It is NOT watching. Clear the check in your browser and start it again.',
       priority: 'high',
     });
+    return;
+  }
+
+  // --- strategy dispatch ----------------------------------------------------
+  // 'probe' runs the seat search and reads the answer; 'watch' is the original
+  // reload-and-scan, kept because it is the right shape for a page that does
+  // render availability. Everything probe-specific is in probe-dom.js -- see
+  // the note at the top of that file about removing it.
+  if ((st.strategy || 'probe') === 'probe') {
+    await runProbe(st, polls);
     return;
   }
 

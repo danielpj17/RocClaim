@@ -178,10 +178,16 @@ var ROCDetect = (function () {
   // still reading WATCHING. This is the decision half of the watchdog that
   // catches that; background.js is only the hands.
   //
-  // A cycle is 8-12s of wait plus however long the portal takes to load, so the
-  // stall threshold is about four missed cycles: long enough that a slow page is
-  // not mistaken for death, short enough to find out in minutes.
-  const STALL_MS = 90000;
+  // A cycle is 20-30s of wait, plus the page load, plus up to 8s for the seat
+  // search to answer -- call it 40s at the slow end. The threshold is about
+  // four of those: long enough that one slow cycle is not mistaken for death,
+  // short enough to find out in minutes.
+  //
+  // Keep this in step with the poll interval in content.js. It was 90s while
+  // the loop polled at 8-12s; leaving it there once the interval tripled would
+  // have made the watchdog fire on healthy cycles and reload the tab out from
+  // under a probe that was still waiting for its answer.
+  const STALL_MS = 180000;
 
   function watchdogVerdict(state, now, options) {
     const st = state || {};
