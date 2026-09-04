@@ -169,6 +169,70 @@ test('handles a link styled as a button, and a role=button div', async () => {
   }
 });
 
+
+// ---------------------------------------------------------------------------
+// The price gate. BYU ships free ROC tickets through the same eVenue funnel it
+// uses for paid ones, so the real claim control says "Buy" and the flow ends in
+// a checkout. These pin the rule that makes that safe: commerce wording is
+// clicked only when the page proves the ticket is free, and absence of a price
+// is not proof.
+// ---------------------------------------------------------------------------
+
+// allowText has to admit "buy" for these; the gate is what keeps it safe.
+const buyConfig = { ...config, claim: { ...config.claim, allowText: '\\b(claim|accept|buy)\\b' } };
+
+test('clicks a Buy control when the page shows the ticket is $0.00', async () => {
+  const r = await run(page(`
+    <h1>Women's Volleyball vs. Utah</h1>
+    <p>ROC Student Ticket</p>
+    <p>Total: $0.00</p>
+    <button onclick="document.body.innerHTML='<h1>Ticket claimed</h1>'">Buy</button>`),
+    { config: buyConfig });
+  assert.equal(r.ok, true, r.detail);
+  assert.deepEqual(clicks, ['Buy']);
+});
+
+test('refuses a Buy control when the page never says it is free', async () => {
+  const r = await run(page('<h1>ROC Ticket</h1><button>Buy</button>'), { config: buyConfig });
+  assert.equal(r.ok, false);
+  assert.equal(r.aborted, true);
+  assert.deepEqual(clicks, [], 'absence of a price is not evidence of free');
+  assert.match(r.detail, /nothing on the page confirms the ticket is free/i);
+});
+
+test('refuses a Buy control when a real price is on the page', async () => {
+  const r = await run(page('<p>Total: $25.00</p><button>Buy</button>'), { config: buyConfig });
+  assert.equal(r.ok, false);
+  assert.equal(r.aborted, true);
+  assert.deepEqual(clicks, []);
+  assert.match(r.detail, /\$25\.00/);
+});
+
+test('a $0.00 elsewhere does not excuse a non-zero charge on the same page', async () => {
+  const r = await run(page(`
+    <p>Service fee: $0.00</p>
+    <p>Ticket price: $15.00</p>
+    <button>Buy</button>`),
+    { config: buyConfig });
+  assert.equal(r.ok, false);
+  assert.deepEqual(clicks, [], 'any non-zero amount must win over free evidence');
+});
+
+test('transfer stays refused even on a page that says $0.00', async () => {
+  const r = await run(page('<p>Total: $0.00</p><button>Accept Transfer</button>'), { config: buyConfig });
+  assert.equal(r.ok, false);
+  assert.deepEqual(clicks, [], 'transfer is prohibited at any price');
+});
+
+test('aborts partway if a price appears at the confirm step', async () => {
+  const r = await run(page(`
+    <p>Total: $0.00</p>
+    <button onclick="document.body.innerHTML='<p>Amount due: $45.00</p><button>Checkout</button>'">Claim Ticket</button>`),
+    { config: { ...config, claim: { ...config.claim, confirmText: '\\b(confirm|continue|submit|checkout)\\b' } } });
+  assert.deepEqual(clicks, ['Claim Ticket'], 'the first click is fine; the second must not happen');
+  assert.match(r.detail, /\$45\.00/);
+});
+
 test('survives a page with no controls at all', async () => {
   const r = await run(page('<p>nothing here</p>'));
   assert.equal(r.ok, false);

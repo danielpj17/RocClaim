@@ -6,6 +6,49 @@ anything on this machine.
 
 ---
 
+## 0. READ THIS FIRST — the Playwright design is blocked (2026-09-04)
+
+**`byutickets.evenue.net` is behind PerimeterX bot detection, and every
+Playwright-driven browser is refused.** Not "needs better selectors" — refused.
+
+The real portal is <https://byutickets.evenue.net/students>. Sport pages are
+`/students/events/<CODE>`; football is `STFB`. (The old `byutickets.com`
+URL in `login.js`, `record.js`, `record-watch.js` and `config.json` was wrong
+and has been corrected.)
+
+What was tested on 2026-09-04, in this order:
+
+| attempt | result |
+| --- | --- |
+| headless Chromium via Playwright | blocked — "Access to this page has been denied" |
+| headed Chromium via Playwright | blocked — same PerimeterX reference ID replayed |
+| Daniel doing the "Press & Hold to confirm you are a human" **by hand**, repeatedly, in the Playwright window | **still blocked** |
+
+That last row is the decisive one. PerimeterX flags the browser as automated
+*before* the challenge is rendered, so a human sitting at the keyboard cannot
+clear it — Chrome's own "controlled by automated software" badge is on the
+window. This is not a puzzle to solve; it is the answer.
+
+**Do not try to get around it.** Clearing the `_px*` cookies, switching to
+`channel: 'chrome'`, stealth plugins, fingerprint patching, CAPTCHA solvers —
+all of it is bot-detection circumvention, all of it is an arms race against a
+vendor whose whole business is winning it, and all of it points at the one
+outcome this project exists to avoid: BYU suspending his access. Section 5
+already says polling faster is how you get flagged; this is the same rule with
+a bigger hammer. If Daniel asks, point him at this section first.
+
+**What this kills:** `watcher.js`, `record.js`, `record-watch.js`,
+`lib/site-byu.js` and `claim.js` all drive Playwright, so none of them can
+reach BYU. The empty `RECON` block was never the last mile. This is. Do not
+spend another session trying to fill `RECON` in — you cannot load the page to
+read it.
+
+**What still works: his own Chrome.** It is not flagged; he browses the site
+normally every day. So the watcher moved into it — see `extension/` and
+section 11.
+
+---
+
 ## 1. What this is
 
 A watcher that monitors the BYU ROC **last-chance / returned-ticket** claim and
@@ -93,6 +136,31 @@ must remind him to return the ticket if his plans changed.
 
 **Whitelist, never blanket-claim.** One event per run, chosen deliberately.
 
+**The refusal list is now two tiers, not one (changed 2026-09-04, with
+Daniel's sign-off).** The original single `forbiddenText` aborted on `buy`,
+`checkout`, `purchase`, `pay` and `$`. That was unshippable: BYU sends free
+ROC tickets through the same eVenue commerce funnel it uses for paid ones, so
+the real control reads **"Buy"** and the flow ends in a **checkout**. The old
+list would have refused to click anything, ever. So:
+
+- `forbiddenText` — **absolute**, refused at any price:
+  `transfer|resell|resale|sell|donate|renew|credit card`. ROC rules prohibit
+  transfer and resale outright and either can get the pass revoked, so no page
+  state makes them acceptable.
+- `commerceText` — **conditional**: `purchase|buy|pay|checkout|price|$`.
+  Clicked only when the page *affirmatively* shows the ticket is free (a
+  `$0.00`, a "free", a "no charge") **and** no non-zero amount appears
+  anywhere on the page.
+
+The load-bearing rule, and the one not to "simplify": **absence of a price is
+not evidence of free.** A page with no dollar sign does not unlock commerce
+wording. Without that, a "Claim and pay" button on a page showing no amount
+sails straight through. `test/claim.test.js` pins exactly that case — if you
+loosen this, that test is what will catch you.
+
+The price is re-read immediately before every click, not just at scan time, so
+a checkout that grows a fee mid-flow aborts partway rather than paying it.
+
 Ticket claims are non-transferable and resale is prohibited — it can get the
 pass revoked. Nothing here should touch resale or transfer.
 
@@ -118,13 +186,31 @@ lib/config.js  DONE -- config load + merge, enforces the 5s poll floor
 lib/notify.js  DONE -- ntfy push
 lib/site.js    DONE -- adapter factory
 lib/site-fake.js  DONE -- fake site, so the whole path runs without BYU
-lib/site-byu.js   SKELETON -- everything site-specific is in its RECON block
+lib/site-byu.js   DEAD END -- its RECON block can never be filled in; the page
+                  cannot be loaded by Playwright at all. See section 0.
 claim.js       DONE -- the claim transaction: finds the control by label
                against an allowlist, walks confirm steps, verifies success
 public/index.html DONE -- picker, stop time, arm switch, Start/Stop, live log
-test/watcher.test.js      DONE -- 13 tests, fake clock, no network
-test/fingerprint.test.js  DONE -- 11 tests pinning what counts as a change
-test/claim.test.js        DONE -- 13 tests, real Chromium, real clicks
+test/watcher.test.js      DONE -- 16 tests, fake clock, no network
+test/fingerprint.test.js  DONE -- 14 tests pinning what counts as a change
+test/claim.test.js        DONE -- 19 tests, real Chromium, real clicks
+
+--- added 2026-09-04 -------------------------------------------------------
+extension/     THE LIVE PATH. Notify-only watcher that runs in Daniel's own
+               Chrome, because Playwright cannot reach the site. Section 12.
+  manifest.json  MV3, host access limited to byutickets.evenue.net + ntfy.sh
+  content.js     the reload/inspect loop; stop time, block detect, no clicking
+  background.js  ntfy POST + desktop notification
+  popup.html/.js topic, stop time, Watch this tab / Stop / Test, live status
+  icon128.png
+lib/panel-auth.js  token gate: local requests pass, tunnelled ones must not
+lib/wait-signal.js finish on Enter OR a stop file OR the browser closing, so
+                   the interactive scripts can be driven remotely
+start-all.ps1  detached server + cloudflared tunnel; pushes the URL to ntfy
+stop-all.ps1
+watch-recon.ps1  detached recon watcher; -Interactive for a visible browser
+stop-recon.ps1
+logs/          git-ignored: server/tunnel/recon output, pids, tunnel.url
 ```
 
 - [x] `login.js`
@@ -134,9 +220,15 @@ test/claim.test.js        DONE -- 13 tests, real Chromium, real clicks
 - [x] Local web UI
 - [x] Tests + a fake site (`npm run demo`) that exercises the whole path
 - [x] Unattended recon capture (`npm run record:watch`)
-- [ ] **Availability detector -- still blocked on reading a recon dump**
-- [x] Claim transaction (`claim.js`) -- generic, tested against real DOM
-- [ ] **Pointing the claim at the real page -- needs the same recon dump**
+- [x] Claim transaction (`claim.js`) — generic, tested against real DOM
+- [x] Two-tier price-gated refusal list (section 5)
+- [x] Detached run + tunnel + token auth (section 11)
+- [x] Browser extension, notify-only (section 12)
+- [ ] ~~Availability detector against the real page~~ — **blocked by
+      PerimeterX, see section 0. Not doable via Playwright.**
+- [ ] ~~Pointing the claim at the real page~~ — same blocker.
+- [ ] Auto-click in the extension — deferred by Daniel until the notify-only
+      build has survived one real onsale.
 
 `npm install` and `npx playwright install chromium` have both been run on this
 machine. `npm test` passes (42 tests, 13 of them driving real headless Chromium). `npm run demo` was driven end to end
@@ -242,7 +334,15 @@ and no signup, so he can start and stop it from his phone. The session never
 leaves his machine. Add ntfy push and it behaves like a deployed app without
 being one.
 
-## 7. The immediate next step, and the fork it resolves
+## 7. ~~The immediate next step~~ — OBSOLETE, see section 0
+
+> **This whole section is dead.** It tells you to run `npm run record` against
+> BYU and read the dump. You cannot: PerimeterX serves a bot wall instead of
+> the page, so the recorder captures nothing but the challenge. The
+> JSON-endpoint-vs-DOM fork it describes is unanswerable by this route, and the
+> answer would not help — no Playwright request reaches the site at all.
+> Kept only so a future session recognises it as already-tried. Go to
+> section 12.
 
 Run the recon before writing any detector:
 
@@ -330,3 +430,148 @@ succeeding consumes it. Suggested approach:
 - Test session expiry: the watcher must notice it has been logged out and say
   so loudly, rather than politely polling a login page for 30 hours. This is
   the most likely silent failure.
+
+---
+
+## 11. Running it all day without touching the laptop (built 2026-09-04)
+
+Daniel runs this on a laptop he leaves open, and drives it from his phone. The
+constraint he named: *nothing* should require going back to VS Code.
+
+**Everything must be detached.** A process started from the VS Code terminal —
+or by an agent — dies when that thing closes. `start-all.ps1` and
+`watch-recon.ps1` use `Start-Process`, which hands the process to Windows, so
+closing VS Code and closing Claude both leave it running.
+
+```
+npm run up          server + cloudflared tunnel, detached
+npm run up:fake     same, against the fake site
+npm run down        stop both
+npm run recon:up    unattended recon watcher, detached
+npm run recon:down  stop it
+```
+
+`start-all.ps1` prints the public https URL, writes it to `logs/tunnel.url`,
+and **pushes it to his phone over ntfy** — a cloudflared quick tunnel gets a new
+random hostname every restart, so the link has to travel to him somehow.
+
+**The panel is authenticated, and it has to be.** `npm run tunnel` puts
+`/api/start` on the public internet, and that arms a claim against a real ROC
+pass. A random `trycloudflare.com` hostname is obscurity, not a lock. So
+`lib/panel-auth.js`:
+
+- requests that did **not** come through the tunnel pass untouched, so
+  `http://localhost:4321` on the laptop still just works;
+- anything carrying `x-forwarded-*` (i.e. via cloudflared) must present the
+  token, as `?k=`, an `x-panel-token` header, or the cookie;
+- a valid `?k=` is swapped for an `HttpOnly` cookie and redirected to a clean
+  URL, so the key stops riding in the address bar;
+- the token lives in `config.local.json` under `ui.token`, generated on first
+  start. Git-ignored, like the ntfy topic.
+
+Verified against the live tunnel: `401` without a key on `/`, `/api/status`
+and `POST /api/start`; `302 → 200` with the key; `200` on localhost with no
+key; `401` on a wrong key.
+
+**Login is the one thing that needs his hands**, and it needs them *at the
+laptop* — a browser window has to open for him to type into. Do that before he
+walks away.
+
+`login.js`, `record.js` and `record-watch.js` used to block on Enter from
+stdin, which made them undrivable by an agent and unfinishable from a phone.
+They now use `lib/wait-signal.js`, which finishes on whichever comes first:
+Enter (when a terminal is attached), a stop file appearing on disk
+(`.login-done`, `.record-done` — this is the remote path), or the browser
+window closing.
+
+**Power settings were already fine** — this machine is set to never sleep or
+blank on AC. Worth re-checking on any other machine, because a sleeping laptop
+is a silently dead watcher.
+
+---
+
+## 12. The browser extension — where the watcher actually lives now
+
+`extension/`, loaded unpacked into **his own Chrome**. This is the response to
+section 0: his browser is not flagged, so the watcher runs inside it instead of
+driving a browser of its own. It does what he does by hand — reload one page
+every 8–12 seconds and look at it.
+
+```
+extension/manifest.json   MV3. Host access limited to byutickets.evenue.net + ntfy.sh
+extension/content.js      the watch loop, runs on the page he armed
+extension/background.js   does the ntfy POST (a content script's fetch is bound
+                          by page CORS; the worker's is not) + desktop notification
+extension/popup.html/.js  topic, stop time, Watch this tab / Stop / Test, live status
+```
+
+To install: `chrome://extensions` → Developer mode → **Load unpacked** →
+select `extension/`. Set the ntfy topic (same one as `config.local.json`:
+`roc-SyE4Bm_bRMn1`), press **Test** to confirm the phone gets it, open the
+event page, set a stop time, press **Watch this tab**.
+
+Design decisions worth keeping:
+
+- **Notify only. It never clicks.** Daniel chose to add auto-click only after
+  the notify build has survived one real onsale. Do not add it early.
+- **It only ever reloads the exact URL that was armed.** Opening any other page
+  on the site must not start a reload loop.
+- **The hard stop is checked before anything else that can act**, and the
+  end-of-watch push repeats the "return the ticket if your plans changed"
+  reminder from section 5.
+- **It stops reloading the moment a claim control appears**, so the page sits
+  still for him instead of refreshing out from under his thumb.
+- **It detects the PerimeterX wall** (`BLOCKED`) and stops loudly with an
+  urgent push saying *it is not watching* — rather than quietly reloading a
+  challenge page for six hours. Section 10 calls this the most likely silent
+  failure; it applies here too.
+- The normalizer is a copy of `lib/fingerprint.js`'s rules. Keep them in sync.
+
+**Unverified, and he should know it:** this has never run against a live
+onsale. Whether PerimeterX tolerates a real browser reloading every ~10s is an
+open question. If it does get challenged he is right there to clear it, which
+is the whole advantage over the Playwright version. The selectors are also a
+guess from screenshots — `CLAIMABLE_LABEL` looks for `buy|claim|accept|get
+ticket|select ticket`, which is based on Daniel's description of a blue "Buy"
+button, not on a captured page.
+
+### The countdown problem, and why the normalizer grew a rule
+
+The football listing shows a live countdown — "Onsale Starts in 1 Hour 40
+Minutes" — that ticks every minute. Nothing in the original normalizer touched
+it: it squashes timestamps, long hex, 9+ digit runs and clock times, and
+deliberately leaves short numbers alone because that is where seat counts live.
+
+So every reload would have fingerprinted as a change: roughly 70 false pushes
+before 10 a.m., and `MAX_SAVED_CHANGES` (60) exhausted *before* the one
+transition worth catching. A rule was added to both `lib/fingerprint.js` and
+the extension's copy:
+
+```js
+[/\b\d+\s+(second|minute|hour|day|week|month)s?\b/gi, '<dur>']
+```
+
+It is a narrow exception to "leave short numbers alone" — the number is bound
+to an explicit time unit, and an availability count is never written that way.
+Three tests in `test/fingerprint.test.js` pin it in both directions: a ticking
+countdown is not a change, "COMING SOON" becoming "Buy" *is*, and
+`0 available` vs `1 available` still differ.
+
+---
+
+## 13. Test suite
+
+**51 tests, all passing** (`npm test`), 19 of them driving real headless
+Chromium against real DOM.
+
+- `test/watcher.test.js` — 16, fake clock, no network
+- `test/fingerprint.test.js` — 14, what counts as a change
+- `test/claim.test.js` — 19, real Chromium and real clicks, including six that
+  pin the price gate: Buy clicks at `$0.00`; refuses Buy with no price
+  evidence; refuses Buy at `$25.00`; a `$0.00` elsewhere does not excuse a
+  `$15.00` on the same page; transfer stays refused even at `$0.00`; and a fee
+  appearing at the confirm step aborts partway.
+- `lib/config.test.js` — 2, config merge and the 5s poll floor
+
+The suite is worth more than usual here, because the parts it covers are the
+parts that cannot be exercised against the real site.

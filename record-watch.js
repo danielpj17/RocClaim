@@ -26,18 +26,25 @@
 const { chromium } = require('playwright');
 const fs = require('node:fs');
 const path = require('node:path');
-const readline = require('node:readline');
+const { waitForSignal } = require('./lib/wait-signal');
 
 const { loadConfig } = require('./lib/config');
 const { makeNotifier } = require('./lib/notify');
 const { normalize, hash, jsonSignature } = require('./lib/fingerprint');
 
 const PROFILE_DIR = path.join(__dirname, '.browser-profile');
-const START_URL = 'https://byutickets.com';
+const START_URL = 'https://byutickets.evenue.net/students';
 const MAX_BODY = 200_000;
 const MAX_SAVED_CHANGES = 60;
 
 const SENSITIVE = /^(cookie|set-cookie|authorization|proxy-authorization|x-csrf-token|x-xsrf-token)$/i;
+
+// The portal sits behind PerimeterX. A challenge page still returns HTTP 200
+// and still fingerprints as "a change", so without this the watcher would
+// happily record a wall of block pages and report itself healthy -- the exact
+// silent failure the brief warns about. When this matches we stop, because
+// continuing to poll a block page cannot succeed and only deepens the flag.
+const BLOCKED = /press\s*&?\s*hold|access to this page has been denied|confirm you are\s*a? ?human|are a human \(and not a bot\)|perimeterx/i;
 
 const config = loadConfig();
 const log = (level, message) => {
@@ -59,10 +66,13 @@ function jitter() {
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+// Only used on the interactive path. With RECORD_WATCH_TARGET set -- which is
+// how this runs unattended -- none of this is reached.
 function waitForEnter(message) {
-  return new Promise((resolve) => {
-    const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-    rl.question(message, () => { rl.close(); resolve(); });
+  return waitForSignal({
+    stopFile: path.join(__dirname, '.record-done'),
+    context: null,
+    message,
   });
 }
 
@@ -242,6 +252,21 @@ function waitForEnter(message) {
       }
       await sleep(jitter());
       continue;
+    }
+
+    if (BLOCKED.test(snap.text)) {
+      save('blocked', polls, snap, 'Bot check. The session is not usable until a human clears it.');
+      log('error', 'BOT CHECK: the site served a human-verification page, not the claim page.');
+      log('error', 'Stopping. This is NOT watching anything -- do not leave it thinking it is.');
+      await notify({
+        title: 'ROC watcher BLOCKED',
+        message:
+          'The ticket site served a "press & hold to confirm you are a human" check ' +
+          'instead of the claim page, so the watcher stopped.\n\n' +
+          'It is NOT watching. Check the page in your own browser.',
+        priority: 'high',
+      }).catch(() => {});
+      return finish();
     }
 
     const fp = `${snap.textFp}/${snap.jsonFp}`;

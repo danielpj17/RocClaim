@@ -10,7 +10,12 @@
     "record": "node record.js",
     "record:watch": "node record-watch.js",
     "test": "node --test",
-    "tunnel": "cloudflared tunnel --url http://localhost:4321"
+    "tunnel": "%USERPROFILE%\\bin\\cloudflared.exe tunnel --url http://localhost:4321",
+    "up": "powershell -ExecutionPolicy Bypass -File ./start-all.ps1",
+    "up:fake": "powershell -ExecutionPolicy Bypass -File ./start-all.ps1 -Fake",
+    "down": "powershell -ExecutionPolicy Bypass -File ./stop-all.ps1",
+    "recon:up": "powershell -ExecutionPolicy Bypass -File ./watch-recon.ps1",
+    "recon:down": "powershell -ExecutionPolicy Bypass -File ./stop-recon.ps1"
   },
   "dependencies": {
     "playwright": "^1.49.0"

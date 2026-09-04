@@ -3,3 +3,6 @@ node_modules/
 recon/
 recon-watch/
 config.local.json
+logs/
+.login-done
+.record-done

@@ -3,7 +3,7 @@
   "pollMinMs": 8000,
   "pollMaxMs": 12000,
   "dryRun": true,
-  "startUrl": "https://byutickets.com",
+  "startUrl": "https://byutickets.evenue.net/students",
   "notify": {
     "server": "https://ntfy.sh",
     "topic": ""
@@ -15,8 +15,9 @@
     "allowText": "\\b(claim|accept)\\b",
     "confirmText": "\\b(confirm|continue|submit|yes|complete|finish)\\b",
     "successText": "(claimed|confirmed|you'?re going|see you|your ticket|success)",
-    "forbiddenText": "(purchase|buy|pay|checkout|price|\\$|credit card|transfer|resell|resale|sell|donate|renew)",
+    "forbiddenText": "(transfer|resell|resale|sell|donate|renew|credit card)",
     "maxConfirmSteps": 3,
-    "stepTimeoutMs": 4000
+    "stepTimeoutMs": 4000,
+    "commerceText": "(purchase|buy|pay|checkout|price|\\$)"
   }
 }

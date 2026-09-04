@@ -1,0 +1,37 @@
+{
+  "manifest_version": 3,
+  "name": "ROC Claim Watcher",
+  "version": "0.1.0",
+  "description": "Watches one BYU ROC event page in your own browser and pushes your phone when a ticket becomes claimable.",
+  "permissions": [
+    "storage",
+    "notifications",
+    "tabs"
+  ],
+  "host_permissions": [
+    "https://byutickets.evenue.net/*",
+    "https://ntfy.sh/*"
+  ],
+  "content_scripts": [
+    {
+      "matches": [
+        "https://byutickets.evenue.net/*"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "ROC Claim Watcher",
+    "default_icon": "icon128.png"
+  },
+  "icons": {
+    "128": "icon128.png"
+  }
+}

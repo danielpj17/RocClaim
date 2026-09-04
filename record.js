@@ -15,10 +15,11 @@
 const { chromium } = require('playwright');
 const fs = require('fs');
 const path = require('path');
-const readline = require('readline');
+const { waitForSignal } = require('./lib/wait-signal');
 
 const PROFILE_DIR = path.join(__dirname, '.browser-profile');
-const START_URL = 'https://byutickets.com';
+const STOP_FILE = path.join(__dirname, '.record-done');
+const START_URL = 'https://byutickets.evenue.net/students';
 const MAX_BODY = 200_000;
 
 const SENSITIVE = /^(cookie|set-cookie|authorization|proxy-authorization|x-csrf-token|x-xsrf-token)$/i;
@@ -29,13 +30,6 @@ function scrubHeaders(headers = {}) {
     out[k] = SENSITIVE.test(k) ? '<redacted>' : v;
   }
   return out;
-}
-
-function waitForEnter(message) {
-  return new Promise((resolve) => {
-    const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-    rl.question(message, () => { rl.close(); resolve(); });
-  });
 }
 
 (async () => {
@@ -112,10 +106,18 @@ function waitForEnter(message) {
   console.log('\nRecording. Navigate to the ROC ticket claim area now.');
   console.log('Read the instructions at the top of record.js if you want the full checklist.\n');
 
-  await waitForEnter('Press Enter here when you are done... ');
+  const reason = await waitForSignal({
+    stopFile: STOP_FILE,
+    context,
+    message: 'Press Enter here when you are done... ',
+  });
+
+  // Closing the window throws the pages away, so there is nothing to snapshot.
+  // The network calls were already captured, so the dump is still useful.
+  if (reason === 'closed') console.log('Browser closed -- keeping network calls, skipping page HTML.');
 
   // Snapshot the HTML of everything still open.
-  const pages = context.pages();
+  const pages = reason === 'closed' ? [] : context.pages();
   for (let i = 0; i < pages.length; i++) {
     try {
       const html = await pages[i].content();
@@ -134,7 +136,7 @@ function waitForEnter(message) {
     .join('\n');
   fs.writeFileSync(path.join(outDir, 'summary.txt'), summary || '(no JSON/XHR calls captured)');
 
-  await context.close();
+  if (reason !== 'closed') await context.close().catch(() => {});
 
   console.log(`\nWrote ${calls.length} calls to:`);
   console.log('  recon/' + stamp);

@@ -15,9 +15,11 @@ const { loadConfig } = require('./lib/config');
 const { makeNotifier } = require('./lib/notify');
 const { createSite } = require('./lib/site');
 const { Watcher } = require('./watcher');
+const { createAuth, loadOrCreateToken } = require('./lib/panel-auth');
 
 const config = loadConfig();
 const SITE_KIND = process.argv.includes('--fake') ? 'fake' : 'byu';
+const auth = createAuth(loadOrCreateToken());
 
 const LOG_MAX = 2000;
 const logs = [];
@@ -118,6 +120,23 @@ const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://localhost');
   const route = url.pathname;
 
+  // Local requests pass straight through; anything arriving via the tunnel
+  // has to present the token. See lib/panel-auth.js.
+  const verdict = auth.check(req, url);
+  if (verdict === 'denied') {
+    res.writeHead(401, { 'content-type': 'text/plain; charset=utf-8' });
+    return res.end('This panel needs its key. Open the link that was pushed to your phone.\n');
+  }
+  if (verdict === 'set-cookie') {
+    // Trade the ?k= for a cookie and bounce to a clean URL, so the token stops
+    // riding along in the address bar and in any link that gets shared.
+    res.writeHead(302, {
+      'set-cookie': auth.cookieHeader(req),
+      location: route === '/' ? '/' : route,
+    });
+    return res.end();
+  }
+
   try {
     if (req.method === 'GET' && STATIC[route]) {
       const [file, type] = STATIC[route];
@@ -177,6 +196,7 @@ const server = http.createServer(async (req, res) => {
 
 server.listen(config.port, '127.0.0.1', () => {
   console.log(`\n  ROC Claim control panel: http://localhost:${config.port}`);
+  console.log(`  Remote key: ${auth.token}  (needed only through the tunnel)`);
   console.log(`  Site adapter: ${SITE_KIND}${SITE_KIND === 'fake' ? '  (nothing real is contacted)' : ''}`);
   if (!config.notify || !config.notify.topic) {
     console.log('  No ntfy topic configured -- notifications will only appear in the log.');

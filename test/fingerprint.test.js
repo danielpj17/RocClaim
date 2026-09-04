@@ -86,6 +86,34 @@ test('calls with no captured body are ignored rather than crashing', () => {
   assert.equal(jsonSignature([]), '[]');
 });
 
+
+// The football listing shows a live countdown ("Onsale Starts in 1 Hour 40
+// Minutes") that ticks every minute. Without squashing it, every poll reads as
+// a change: the archive cap is spent long before the onsale, and the one
+// transition worth catching arrives buried in an hour of false pushes.
+test('a ticking countdown is not a change', () => {
+  const row = (left) =>
+    `COMING SOON Football Season 2026 BYU vs Utah Tech Sat, Sep 5, 2026 6:00pm ` +
+    `LaVell Edwards Stadium Onsale Starts in ${left} Fri, Sep 4 10:00am`;
+  same(row('1 Hour 40 Minutes'), row('1 Hour 39 Minutes'));
+  same(row('2 Hours 3 Minutes'), row('9 Hours 51 Minutes'));
+  same(row('5 Days'), row('3 Days'));
+});
+
+test('the onsale actually opening IS a change', () => {
+  differs(
+    'COMING SOON BYU vs Utah Tech Onsale Starts in 1 Hour 40 Minutes',
+    'BYU vs Utah Tech Buy',
+    'COMING SOON becoming a Buy button is the whole signal'
+  );
+});
+
+test('squashing durations does not squash availability counts', () => {
+  differs('0 tickets available', '1 tickets available', 'a seat count is not a duration');
+  differs('Sold Out', 'Not Many Left');
+  differs('Onsale Starts in 2 Hours 0 available', 'Onsale Starts in 2 Hours 1 available');
+});
+
 test('normalize handles null and undefined', () => {
   assert.equal(normalize(null), '');
   assert.equal(normalize(undefined), '');
