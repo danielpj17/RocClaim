@@ -1,0 +1,13 @@
+{
+  "name": "roc-claim",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Watches the BYU ROC last-chance claim for returned tickets and claims one.",
+  "scripts": {
+    "login": "node login.js",
+    "record": "node record.js"
+  },
+  "dependencies": {
+    "playwright": "^1.49.0"
+  }
+}
