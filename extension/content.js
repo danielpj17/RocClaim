@@ -106,18 +106,25 @@ async function stop(reason) {
     // button is already on the page, this is the watch telling you it is
     // about to ignore it.
     await set({ claimBaseline: D.countByKey(candidates) });
-    if (candidates.length) {
+    const severity = D.armSeverity(candidates, preOnsale);
+    if (severity) {
       const labels = candidates.map((c) => '"' + c.label + '"').join(', ');
       await send({
         type: 'notify',
-        title: 'ROC watch armed',
+        title: severity === 'urgent' ? 'ROC CHECK NOW -- claim control already on the page' : 'ROC watch armed',
         message:
-          'Watching this page. ' + candidates.length + ' claim-looking control(s) were ' +
-          'already here when you armed it and will be IGNORED as normal page furniture: ' +
-          labels + '\n\n' +
-          'If one of those is the real claim button, the ticket is already available -- ' +
-          'go click it yourself.\n' + location.href,
-        priority: 'default',
+          (severity === 'urgent'
+            ? 'The watch is running, but ' + candidates.length + ' claim control(s) were ' +
+              'ALREADY on the page when it armed, and the page does not read as pre-onsale. ' +
+              'That may be a live ticket sitting there right now: ' + labels + '\n\n' +
+              'Baselined controls are ignored from here on, so the watch will NOT push again ' +
+              'for these. Open the page and look.\n\n'
+            : 'Watching this page. ' + candidates.length + ' claim-looking control(s) were ' +
+              'already here when you armed it and will be IGNORED as page furniture: ' +
+              labels + '\n\nThe page still reads as pre-onsale, so these are almost ' +
+              'certainly navigation, not a ticket.\n\n') +
+          location.href,
+        priority: severity,
       });
     }
   } else {

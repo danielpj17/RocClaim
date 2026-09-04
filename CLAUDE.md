@@ -232,7 +232,7 @@ logs/          git-ignored: server/tunnel/recon output, pids, tunnel.url
       build has survived one real onsale.
 
 `npm install` and `npx playwright install chromium` have both been run on this
-machine. `npm test` passes (77 tests, 26 of them driving real headless
+machine. `npm test` passes (81 tests, 26 of them driving real headless
 Chromium). `npm run demo` was driven end to end against the fake site: start
 rejections, double-start, SSE log, armed claim, notification text. None of it
 has touched BYU yet, and per section 0 none of it can.
@@ -594,9 +594,20 @@ they are trusted:
    so a *second* identical control appearing still registers — the nasty case
    where the standing link and the real button read the same. **This guard
    cannot produce a false negative**, which is why it carries the weight.
-   If claim-like controls are present at arm time, it pushes a normal-priority
-   note naming them, so "it is ignoring the real button" is visible rather
-   than silent.
+   If claim-like controls are present at arm time, it pushes a note naming
+   them, so "it is ignoring the real button" is visible rather than silent.
+   How loud that note is depends on the page's own pre-onsale wording
+   (`armSeverity`), because **arming mid-onsale is the normal case, not an
+   edge case** -- returns trickle in for a day and a half, so most watches
+   start with the window already open:
+
+   - page reads COMING SOON / counting down -> the control is navigation.
+     Normal priority, informational.
+   - no pre-onsale wording -> the window may be open and that may be a live
+     ticket about to be baselined away. **Urgent**, worded as CHECK NOW.
+
+   It never *disarms* on this basis. Absence of pre-onsale wording is weak
+   evidence, and a wrong guess must not stop something watching.
 2. **A deliberately narrow structural filter**: `nav, [role="navigation"]`
    only. `<header>`, `<footer>` and class names like `event-header` are *not*
    excluded — HTML5 allows a `<header>` inside any section, so excluding those
@@ -638,12 +649,12 @@ countdown is not a change, "COMING SOON" becoming "Buy" *is*, and
 
 ## 13. Test suite
 
-**77 tests, all passing** (`npm test`), 26 of them driving real headless
+**81 tests, all passing** (`npm test`), 26 of them driving real headless
 Chromium against real DOM.
 
 - `test/watcher.test.js` — 16, fake clock, no network
 - `test/fingerprint.test.js` — 14, what counts as a change
-- `test/extension.test.js` — 26, the live path. Nine pin the watchdog verdict,
+- `test/extension.test.js` — 30, the live path. Nine pin the watchdog verdict,
   seven pin claim detection against real Chromium DOM (a nav Buy link never
   fires; a `<header>`-wrapped Buy is not excluded; a disabled Buy becoming
   enabled does fire), and one asserts the normalizer copy has not drifted from

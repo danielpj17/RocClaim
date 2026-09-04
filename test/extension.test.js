@@ -150,6 +150,32 @@ test('an empty baseline still fires -- a page with no furniture is the easy case
   assert.equal(D.newClaimables(D.claimCandidates([ctl()]), {}).length, 1);
 });
 
+test('arming with nothing claimable says nothing at all', () => {
+  assert.equal(D.armSeverity([], true), null);
+  assert.equal(D.armSeverity([], false), null);
+});
+
+test('a Buy control present on a pre-onsale page is announced quietly', () => {
+  // COMING SOON / a countdown means nothing is claimable yet, so a Buy-ish
+  // control is navigation. Worth saying once, not worth an urgent push.
+  assert.equal(D.armSeverity([ctl({ label: 'Buy Tickets' })], true), 'default');
+});
+
+test('a Buy control present with no pre-onsale wording is URGENT', () => {
+  // Arming mid-onsale is the normal case -- returns trickle in for a day and a
+  // half. If a claim control is already sitting there and the page is not
+  // counting down, that may be a live ticket the baseline is about to swallow.
+  assert.equal(D.armSeverity([ctl({ label: 'Buy' })], false), 'urgent');
+});
+
+test('the arm-time severity never disarms the watch on its own', () => {
+  // It is a loudness decision only: absence of pre-onsale wording is weak
+  // evidence, and a wrong guess must not stop anything watching.
+  for (const pre of [true, false]) {
+    assert.ok(['default', 'urgent'].includes(D.armSeverity([ctl()], pre)));
+  }
+});
+
 test('prices are read off the page but a missing price is not evidence of free', () => {
   assert.equal(D.pricesOnPage('Total $0.00').max, 0);
   assert.equal(D.pricesOnPage('Total $25.00 plus $1,200.50 fee').max, 1200.5);

@@ -140,6 +140,27 @@ var ROCDetect = (function () {
     return fresh;
   }
 
+  // How loudly to announce claim controls that were already on the page when
+  // the watch was armed.
+  //
+  // Arming mid-onsale is a normal case, not an edge case -- last-chance returns
+  // trickle in for a day and a half, so most watches start with the window
+  // already open. Those controls get baselined and ignored from then on, which
+  // is right for page furniture and badly wrong if one of them is a live
+  // ticket. The page's own pre-onsale wording is the tiebreak:
+  //
+  //   COMING SOON / a countdown  -> nothing is claimable yet, so a Buy-ish
+  //                                 control is furniture. Say so quietly.
+  //   no pre-onsale wording      -> the window may well be open and that may
+  //                                 be a real ticket sitting there. Shout.
+  //
+  // It never decides *not* to watch on this basis -- absence of pre-onsale
+  // wording is weak evidence, and a wrong guess here must not disarm anything.
+  function armSeverity(candidates, preOnsale) {
+    if (!candidates || !candidates.length) return null;
+    return preOnsale ? 'default' : 'urgent';
+  }
+
   // Any real dollar amount means this is not the free ROC claim we are waiting
   // for. Reported, not acted on -- this build never clicks.
   function pricesOnPage(text) {
@@ -205,6 +226,7 @@ var ROCDetect = (function () {
     controlKey,
     countByKey,
     newClaimables,
+    armSeverity,
     pricesOnPage,
     watchdogVerdict,
   };
