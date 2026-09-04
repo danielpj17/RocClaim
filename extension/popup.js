@@ -15,7 +15,7 @@ function localInputValue(d) {
 async function render() {
   const st = await get([
     'enabled', 'targetUrl', 'stopAt', 'polls', 'lastCheck',
-    'stoppedReason', 'stoppedAt', 'topic', 'log',
+    'stoppedReason', 'stoppedAt', 'topic', 'log', 'lastResult', 'nextPollAt',
   ]);
 
   if (st.topic && !$('topic').value) $('topic').value = st.topic;
@@ -25,6 +25,11 @@ async function render() {
   if (st.enabled) {
     bits.push('<span class="on">WATCHING</span>');
     bits.push(`${st.polls || 0} checks &middot; last ${fmt(st.lastCheck)}`);
+    // What the probe actually found. "It is polling" is not the same as "it can
+    // read the page", and the first run is exactly when you need to tell them
+    // apart.
+    if (st.lastResult) bits.push(`last answer: <b>${String(st.lastResult).slice(0, 60)}</b>`);
+    if (st.nextPollAt) bits.push(`<span class="muted">next check ~${fmt(st.nextPollAt)}</span>`);
     if (st.stopAt) bits.push(`stops at ${fmt(st.stopAt)}`);
     if (st.targetUrl) {
       bits.push(`<span class="muted">${String(st.targetUrl).replace(/^https?:\/\//, '').slice(0, 46)}</span>`);
@@ -32,6 +37,7 @@ async function render() {
   } else {
     bits.push('<span class="off">STOPPED</span>');
     if (st.stoppedReason) bits.push(`${st.stoppedReason} (${fmt(st.stoppedAt)})`);
+    if (st.lastResult) bits.push(`last answer: <b>${String(st.lastResult).slice(0, 60)}</b>`);
     if (st.polls) bits.push(`${st.polls} checks total`);
   }
   $('status').innerHTML = bits.join('<br>');
