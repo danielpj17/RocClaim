@@ -224,6 +224,7 @@ logs/          git-ignored: server/tunnel/recon output, pids, tunnel.url
 - [x] Two-tier price-gated refusal list (section 5)
 - [x] Detached run + tunnel + token auth (section 11)
 - [x] Browser extension, notify-only (section 12)
+- [x] Watchdog against silent loop death + arm-time claim baseline (section 12)
 - [ ] ~~Availability detector against the real page~~ — **blocked by
       PerimeterX, see section 0. Not doable via Playwright.**
 - [ ] ~~Pointing the claim at the real page~~ — same blocker.
@@ -231,15 +232,14 @@ logs/          git-ignored: server/tunnel/recon output, pids, tunnel.url
       build has survived one real onsale.
 
 `npm install` and `npx playwright install chromium` have both been run on this
-machine. `npm test` passes (42 tests, 13 of them driving real headless Chromium). `npm run demo` was driven end to end
-against the fake site: start rejections, double-start, SSE log, armed claim,
-notification text. None of it has touched BYU yet.
+machine. `npm test` passes (77 tests, 26 of them driving real headless
+Chromium). `npm run demo` was driven end to end against the fake site: start
+rejections, double-start, SSE log, armed claim, notification text. None of it
+has touched BYU yet, and per section 0 none of it can.
 
-Everything that is not BYU-specific is done. What remains is one block of one
-file: `RECON` at the top of `lib/site-byu.js`. Fill it in from a recording and
-flip `configured: true`. Until then the real adapter refuses to open and says
-so, which is on purpose -- guessing selectors against a live ticketing system
-is how you click the wrong button once.
+The paragraph that used to live here told you to fill in `RECON` in
+`lib/site-byu.js`. Ignore it — section 0 explains why that file is a dead end.
+The live path is `extension/`.
 
 ### On catching an "available" state (raised 2026-09-03)
 
@@ -499,16 +499,29 @@ every 8–12 seconds and look at it.
 
 ```
 extension/manifest.json   MV3. Host access limited to byutickets.evenue.net + ntfy.sh
-extension/content.js      the watch loop, runs on the page he armed
-extension/background.js   does the ntfy POST (a content script's fetch is bound
-                          by page CORS; the worker's is not) + desktop notification
+extension/detect.js       ALL the decisions: normalizer, claim detection, the
+                          watchdog verdict. Loaded as the first content script,
+                          importScripts()'d by the worker, require()'d by tests
+extension/content.js      the watch loop, runs on the page he armed. Only the
+                          parts that touch the page and the clock
+extension/background.js   ntfy POST (a content script's fetch is bound by page
+                          CORS; the worker's is not) + desktop notification +
+                          the watchdog alarm
 extension/popup.html/.js  topic, stop time, Watch this tab / Stop / Test, live status
 ```
 
 To install: `chrome://extensions` → Developer mode → **Load unpacked** →
-select `extension/`. Set the ntfy topic (same one as `config.local.json`:
-`roc-SyE4Bm_bRMn1`), press **Test** to confirm the phone gets it, open the
+select `extension/`. Set the ntfy topic — read it from `config.local.json`,
+which is git-ignored — press **Test** to confirm the phone gets it, open the
 event page, set a stop time, press **Watch this tab**.
+
+**Never write the topic literal into a tracked file, this one included.** An
+ntfy topic is a bearer secret: the whole access model is "whoever knows the
+string". Anyone holding it can read every push — including `ROC TICKET
+AVAILABLE` and the event URL, in time to take the ticket — and can send fake
+pushes to his phone. It belongs in `config.local.json` and the extension popup,
+nowhere else. (This paragraph exists because a previous session pasted it here
+and it reached GitHub.)
 
 Design decisions worth keeping:
 
@@ -525,15 +538,79 @@ Design decisions worth keeping:
   urgent push saying *it is not watching* — rather than quietly reloading a
   challenge page for six hours. Section 10 calls this the most likely silent
   failure; it applies here too.
-- The normalizer is a copy of `lib/fingerprint.js`'s rules. Keep them in sync.
+- The normalizer is a copy of `lib/fingerprint.js`'s rules. A test now asserts
+  the two lists are byte-identical, so drift fails the build instead of going
+  unnoticed.
 
 **Unverified, and he should know it:** this has never run against a live
 onsale. Whether PerimeterX tolerates a real browser reloading every ~10s is an
 open question. If it does get challenged he is right there to clear it, which
-is the whole advantage over the Playwright version. The selectors are also a
-guess from screenshots — `CLAIMABLE_LABEL` looks for `buy|claim|accept|get
-ticket|select ticket`, which is based on Daniel's description of a blue "Buy"
-button, not on a captured page.
+is the whole advantage over the Playwright version. `CLAIMABLE_LABEL` is still
+a guess from screenshots — `buy|claim|accept|get ticket|select ticket`, based
+on Daniel's description of a blue "Buy" button, not on a captured page.
+
+### The watchdog, and the silent death it exists for (added 2026-09-04)
+
+The poll loop had exactly one thread holding it together: each page load
+scheduled the next reload. **Any load that did not run the content script ended
+the watch permanently** — a network blip serving a Chrome error page, a
+redirect off the armed URL, the tab being closed — with `enabled` still `true`,
+the popup still reading **WATCHING**, and a stale `lastCheck` nobody was
+looking at. The stop-time push never fired either, because that check also
+lived in the loop. This is section 10's "most likely silent failure" and it was
+unguarded: he would have walked away at 10 a.m. believing it was running.
+
+So `background.js` now runs a `chrome.alarms` watchdog every 30s:
+
+- `lastCheck` (written before any early return in `content.js`) is the
+  heartbeat; `armedAt` seeds it so "armed but the script never ran once" is
+  also caught.
+- Stale for more than `STALL_MS` (90s ≈ four missed cycles — long enough that a
+  slow portal is not mistaken for death) → **reload the armed tab once** to
+  restart the loop, and say so. A dead loop self-heals rather than just
+  reporting.
+- Still stale a stall-window after that recovery → stop and push **high**
+  priority, saying plainly it is NOT watching.
+- Armed tab gone → same, with the reason.
+- **The stop time is evaluated here too**, so the return-the-ticket reminder
+  fires even when the poll loop is the thing that died.
+
+The alarm is created and cleared off `chrome.storage.onChanged` for `enabled`,
+so every path that starts or stops a watch is covered without each having to
+remember. `ROCDetect.watchdogVerdict()` is a pure function and holds all of
+that logic; `background.js` only executes the verdict.
+
+### Why a "Buy" link in the nav did not fire an urgent push on poll 1
+
+`CLAIMABLE_LABEL` matches bare `buy` against every `button`/`a`/`[role=button]`
+on the page. On a real eVenue page a standing "Buy Tickets" nav link — or
+another event's control on a listing — would have matched on the *first* load
+of every watch, pushed URGENT, and stopped. Two guards, in order of how much
+they are trusted:
+
+1. **The arm-time baseline (load-bearing).** Whatever looks claimable on the
+   first poll is recorded as page furniture and ignored from then on. Only a
+   control that appears *later* is a ticket. Counts are stored, not just keys,
+   so a *second* identical control appearing still registers — the nasty case
+   where the standing link and the real button read the same. **This guard
+   cannot produce a false negative**, which is why it carries the weight.
+   If claim-like controls are present at arm time, it pushes a normal-priority
+   note naming them, so "it is ignoring the real button" is visible rather
+   than silent.
+2. **A deliberately narrow structural filter**: `nav, [role="navigation"]`
+   only. `<header>`, `<footer>` and class names like `event-header` are *not*
+   excluded — HTML5 allows a `<header>` inside any section, so excluding those
+   could hide the real button. A spurious push is cheap; a missed ticket is the
+   thing this exists to prevent. Do not widen this filter; widen the baseline
+   instead.
+
+**Verified in real Chrome** (unpacked extension, `--headless=new`, a fake host
+page): the manifest loads, the worker boots and `importScripts('detect.js')`
+resolves, the alarm arms on `enabled` and clears on stop, the loop reloads
+itself, a nav "Buy Tickets" link does not fire across repeated polls, a `Buy`
+button appearing later does fire and stops the reloading, and a backdated
+heartbeat gets detected and recovered by the watchdog. Still not verified
+against BYU — that needs a real onsale.
 
 ### The countdown problem, and why the normalizer grew a rule
 
@@ -561,11 +638,17 @@ countdown is not a change, "COMING SOON" becoming "Buy" *is*, and
 
 ## 13. Test suite
 
-**51 tests, all passing** (`npm test`), 19 of them driving real headless
+**77 tests, all passing** (`npm test`), 26 of them driving real headless
 Chromium against real DOM.
 
 - `test/watcher.test.js` — 16, fake clock, no network
 - `test/fingerprint.test.js` — 14, what counts as a change
+- `test/extension.test.js` — 26, the live path. Nine pin the watchdog verdict,
+  seven pin claim detection against real Chromium DOM (a nav Buy link never
+  fires; a `<header>`-wrapped Buy is not excluded; a disabled Buy becoming
+  enabled does fire), and one asserts the normalizer copy has not drifted from
+  `lib/fingerprint.js`. This is the only suite covering code that can actually
+  reach BYU, so it is the one to grow.
 - `test/claim.test.js` — 19, real Chromium and real clicks, including six that
   pin the price gate: Buy clicks at `$0.00`; refuses Buy with no price
   evidence; refuses Buy at `$25.00`; a `$0.00` elsewhere does not excuse a

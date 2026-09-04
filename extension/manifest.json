@@ -6,7 +6,8 @@
   "permissions": [
     "storage",
     "notifications",
-    "tabs"
+    "tabs",
+    "alarms"
   ],
   "host_permissions": [
     "https://byutickets.evenue.net/*",
@@ -18,6 +19,7 @@
         "https://byutickets.evenue.net/*"
       ],
       "js": [
+        "detect.js",
         "content.js"
       ],
       "run_at": "document_idle"

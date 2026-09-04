@@ -68,10 +68,17 @@ $('start').addEventListener('click', async () => {
     targetUrl: tab.url.split('#')[0],
     stopAt,
     baselineFp: null,
+    // Cleared so the next load re-baselines against the page as it is right
+    // now, rather than inheriting what some earlier watch saw.
+    claimBaseline: null,
     polls: 0,
     stoppedReason: null,
     stoppedAt: null,
     lastCheck: null,
+    // The watchdog needs a starting heartbeat: without one it cannot tell
+    // "armed a second ago" from "armed an hour ago and the script never ran".
+    armedAt: Date.now(),
+    recoveryAt: null,
   });
 
   // The content script only acts on load, so kick the first one off.

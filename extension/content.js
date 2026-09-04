@@ -8,90 +8,13 @@
 //
 // It does exactly what you were doing by hand: reload one page every 8-12
 // seconds and look at it. It does not click anything.
+//
+// The decisions all live in detect.js, which loads first and is testable
+// outside a browser. This file is the part that touches the page and the
+// clock.
 
 const POLL_MIN_MS = 8000;
 const POLL_MAX_MS = 12000;
-
-// Mirrors lib/fingerprint.js. Squash only unambiguous churn -- and the live
-// countdown ("Onsale Starts in 1 Hour 40 Minutes"), which otherwise makes
-// every single reload look like a change.
-const RULES = [
-  [/\d{4}-\d{2}-\d{2}[T ][\d:.]+(Z|[+-]\d{2}:?\d{2})?/g, '<ts>'],
-  [/\b[0-9a-f]{16,}\b/gi, '<hex>'],
-  [/\b\d{9,}\b/g, '<num>'],
-  [/\b\d{1,2}:\d{2}(:\d{2})?\s?(AM|PM|am|pm)?\b/g, '<time>'],
-  [/\b\d+\s+(second|minute|hour|day|week|month)s?\b/gi, '<dur>'],
-];
-
-function normalize(input) {
-  let s = String(input == null ? '' : input);
-  for (const [pattern, replacement] of RULES) s = s.replace(pattern, replacement);
-  return s.replace(/\s+/g, ' ').trim();
-}
-
-// Small, dependency-free, and stable across reloads.
-function hash(s) {
-  let h1 = 0x811c9dc5;
-  let h2 = 0x01000193;
-  for (let i = 0; i < s.length; i++) {
-    h1 = (h1 ^ s.charCodeAt(i)) >>> 0;
-    h1 = Math.imul(h1, 16777619) >>> 0;
-    h2 = (h2 + s.charCodeAt(i) * (i + 1)) >>> 0;
-  }
-  return h1.toString(16).padStart(8, '0') + h2.toString(16).padStart(8, '0');
-}
-
-const BLOCKED = /press\s*&?\s*hold|access to this page has been denied|confirm you are\s*a? ?human|are a human \(and not a bot\)/i;
-
-// "COMING SOON" and a countdown mean the onsale has not opened. Their absence
-// is not proof of a ticket, so it is only used to describe state, never to
-// decide.
-const PRE_ONSALE = /coming soon|onsale starts in|on sale starts in/i;
-
-const CLAIMABLE_LABEL = /\b(buy|claim|accept|get ticket|select ticket)\b/i;
-
-// Never treated as a ticket, whatever else the page says. Mirrors the refusal
-// list in claim.js: ROC rules prohibit transfer and resale outright.
-const NEVER = /\b(transfer|resell|resale|donate|renew)\b/i;
-
-function visibleControls() {
-  const els = Array.from(
-    document.querySelectorAll('button, a, input[type=submit], input[type=button], [role="button"]')
-  );
-  return els
-    .map((el) => {
-      const label = (
-        el.innerText ||
-        el.textContent ||
-        el.value ||
-        el.getAttribute('aria-label') ||
-        ''
-      )
-        .replace(/\s+/g, ' ')
-        .trim();
-      const r = el.getBoundingClientRect();
-      return {
-        label,
-        visible: r.width > 0 && r.height > 0,
-        disabled: el.hasAttribute('disabled') || el.getAttribute('aria-disabled') === 'true',
-      };
-    })
-    .filter((c) => c.label && c.visible && !c.disabled);
-}
-
-function findClaimable(controls) {
-  return controls.filter((c) => CLAIMABLE_LABEL.test(c.label) && !NEVER.test(c.label));
-}
-
-// Any real dollar amount means this is not the free ROC claim we are waiting
-// for. Reported, not acted on -- this build never clicks.
-function pricesOnPage(text) {
-  const found = text.match(/\$\s*[\d,]+(?:\.\d{2})?/g) || [];
-  const amounts = found
-    .map((s) => parseFloat(s.replace(/[$,\s]/g, '')))
-    .filter((n) => Number.isFinite(n));
-  return { found, max: amounts.length ? Math.max(...amounts) : 0 };
-}
 
 const send = (msg) =>
   new Promise((resolve) => {
@@ -117,11 +40,14 @@ async function stop(reason) {
 }
 
 (async function main() {
+  const D = ROCDetect;
+
   const st = await get([
     'enabled',
     'targetUrl',
     'stopAt',
     'baselineFp',
+    'claimBaseline',
     'polls',
     'topic',
   ]);
@@ -134,6 +60,10 @@ async function stop(reason) {
 
   const text = document.body ? document.body.innerText : '';
   const polls = (st.polls || 0) + 1;
+
+  // Written before anything else can return early, because this is the
+  // heartbeat the service-worker watchdog reads to tell a live watch from a
+  // dead one.
   await set({ polls, lastCheck: Date.now(), lastUrl: location.href });
 
   // The hard stop. Checked before anything else that could act.
@@ -151,7 +81,7 @@ async function stop(reason) {
     return;
   }
 
-  if (BLOCKED.test(text)) {
+  if (D.BLOCKED.test(text)) {
     await stop('the site served a human-verification check');
     await send({
       type: 'notify',
@@ -164,30 +94,55 @@ async function stop(reason) {
     return;
   }
 
-  const controls = visibleControls();
-  const claimable = findClaimable(controls);
-  const price = pricesOnPage(text);
-  const preOnsale = PRE_ONSALE.test(text);
+  const candidates = D.claimCandidates(D.scanControls());
+  const price = D.pricesOnPage(text);
+  const preOnsale = D.PRE_ONSALE.test(text);
 
-  if (claimable.length) {
-    await stop('a ticket looks claimable');
-    const labels = claimable.map((c) => '"' + c.label + '"').join(', ');
-    await send({
-      type: 'notify',
-      title: 'ROC TICKET AVAILABLE',
-      message:
-        'A claimable control appeared on the page you are watching: ' + labels + '\n\n' +
-        (price.max > 0
-          ? 'Heads up: the page shows ' + price.found.join(', ') + ', so check it is the free ROC claim.\n\n'
-          : '') +
-        'Reloading has stopped so the page stays put. Go claim it.\n' +
-        location.href,
-      priority: 'urgent',
-    });
-    return;
+  if (!st.claimBaseline) {
+    // First poll of this watch. Whatever already looks claimable is page
+    // furniture -- a standing "Buy Tickets" link, another event's control --
+    // and is recorded so it never fires. Only something that appears *later*
+    // is a ticket. Announced rather than done silently: if the real claim
+    // button is already on the page, this is the watch telling you it is
+    // about to ignore it.
+    await set({ claimBaseline: D.countByKey(candidates) });
+    if (candidates.length) {
+      const labels = candidates.map((c) => '"' + c.label + '"').join(', ');
+      await send({
+        type: 'notify',
+        title: 'ROC watch armed',
+        message:
+          'Watching this page. ' + candidates.length + ' claim-looking control(s) were ' +
+          'already here when you armed it and will be IGNORED as normal page furniture: ' +
+          labels + '\n\n' +
+          'If one of those is the real claim button, the ticket is already available -- ' +
+          'go click it yourself.\n' + location.href,
+        priority: 'default',
+      });
+    }
+  } else {
+    const fresh = D.newClaimables(candidates, st.claimBaseline);
+    if (fresh.length) {
+      await stop('a ticket looks claimable');
+      const labels = fresh.map((c) => '"' + c.label + '"').join(', ');
+      await send({
+        type: 'notify',
+        title: 'ROC TICKET AVAILABLE',
+        message:
+          'A claim control that was NOT on the page when you armed it just appeared: ' +
+          labels + '\n\n' +
+          (price.max > 0
+            ? 'Heads up: the page shows ' + price.found.join(', ') + ', so check it is the free ROC claim.\n\n'
+            : '') +
+          'Reloading has stopped so the page stays put. Go claim it.\n' +
+          location.href,
+        priority: 'urgent',
+      });
+      return;
+    }
   }
 
-  const fp = hash(normalize(text));
+  const fp = D.hash(D.normalize(text));
 
   if (!st.baselineFp) {
     await set({ baselineFp: fp });
