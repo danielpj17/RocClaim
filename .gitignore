@@ -1,4 +1,5 @@
 node_modules/
 .browser-profile/
 recon/
+recon-watch/
 config.local.json

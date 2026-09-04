@@ -1,11 +1,16 @@
 {
   "name": "roc-claim",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "description": "Watches the BYU ROC last-chance claim for returned tickets and claims one.",
   "scripts": {
+    "start": "node server.js",
+    "demo": "node server.js --fake",
     "login": "node login.js",
-    "record": "node record.js"
+    "record": "node record.js",
+    "record:watch": "node record-watch.js",
+    "test": "node --test",
+    "tunnel": "cloudflared tunnel --url http://localhost:4321"
   },
   "dependencies": {
     "playwright": "^1.49.0"

@@ -1,0 +1,238 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>ROC Claim</title>
+<style>
+  :root {
+    --bg: #0e1116; --panel: #161b22; --line: #262d38; --text: #e6edf3;
+    --dim: #8b949e; --accent: #0062b8; --ok: #2ea043; --warn: #d29922;
+    --hit: #f0883e; --err: #f85149;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+    font: 15px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
+  .wrap { max-width: 760px; margin: 0 auto; padding: 20px 16px 60px; }
+  header { display: flex; align-items: baseline; gap: 12px; margin-bottom: 18px; flex-wrap: wrap; }
+  h1 { font-size: 20px; margin: 0; letter-spacing: -0.01em; }
+  .badge { font-size: 12px; padding: 2px 8px; border-radius: 999px; border: 1px solid var(--line); color: var(--dim); }
+  .badge.live { color: var(--ok); border-color: #1c6b30; }
+  .badge.fake { color: var(--warn); border-color: #6b5119; }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 16px; margin-bottom: 14px; }
+  label { display: block; font-size: 13px; color: var(--dim); margin-bottom: 6px; }
+  select, input[type=text], input[type=datetime-local] {
+    width: 100%; padding: 10px; border-radius: 8px; border: 1px solid var(--line);
+    background: #0d1117; color: var(--text); font: inherit; }
+  .row { margin-bottom: 14px; }
+  .presets { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+  .presets button { font-size: 12px; padding: 5px 10px; border-radius: 6px;
+    border: 1px solid var(--line); background: #0d1117; color: var(--dim); cursor: pointer; }
+  .presets button:hover { color: var(--text); border-color: #3d4653; }
+  .arm { display: flex; gap: 10px; align-items: flex-start; padding: 12px;
+    border-radius: 8px; border: 1px solid var(--line); background: #0d1117; }
+  .arm input { margin-top: 3px; width: 16px; height: 16px; flex: none; }
+  .arm .t { font-size: 13px; }
+  .arm .t b { color: var(--hit); }
+  .arm .t span { color: var(--dim); display: block; margin-top: 2px; }
+  .actions { display: flex; gap: 10px; }
+  .btn { flex: 1; padding: 12px; border-radius: 8px; border: none; font: inherit;
+    font-weight: 600; cursor: pointer; }
+  .btn.go { background: var(--accent); color: #fff; }
+  .btn.go:disabled { background: #21262d; color: #55606d; cursor: not-allowed; }
+  .btn.stop { background: #21262d; color: var(--err); border: 1px solid #4a2326; }
+  .btn.stop:disabled { color: #55606d; border-color: var(--line); cursor: not-allowed; }
+  .status { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 12px; }
+  .status div span { display: block; font-size: 12px; color: var(--dim); }
+  .status div b { font-size: 15px; font-weight: 600; }
+  #log { background: #0d1117; border: 1px solid var(--line); border-radius: 10px;
+    padding: 12px; height: 340px; overflow-y: auto;
+    font: 12px/1.6 ui-monospace, SFMono-Regular, Consolas, monospace; }
+  #log div { white-space: pre-wrap; word-break: break-word; }
+  .t-dim { color: #6e7681; }
+  .l-poll { color: var(--dim); } .l-info { color: var(--text); }
+  .l-warn { color: var(--warn); } .l-error { color: var(--err); }
+  .l-hit { color: var(--hit); font-weight: 700; }
+  .note { font-size: 12px; color: var(--dim); margin-top: 10px; }
+  .err { color: var(--err); font-size: 13px; min-height: 18px; margin-top: 10px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>ROC Claim</h1>
+    <span class="badge" id="siteBadge">&hellip;</span>
+    <span class="badge" id="notifyBadge">&hellip;</span>
+  </header>
+
+  <div class="panel">
+    <div class="row">
+      <label for="event">Event</label>
+      <select id="event"></select>
+      <input type="text" id="eventManual" placeholder="Event id / name" style="display:none;margin-top:8px">
+      <div class="note" id="eventNote"></div>
+    </div>
+
+    <div class="row">
+      <label for="stopAt">Stop watching at</label>
+      <input type="datetime-local" id="stopAt">
+      <div class="presets">
+        <button data-h="2">+2h</button>
+        <button data-h="4">+4h</button>
+        <button data-h="8">+8h</button>
+        <button data-tonight="23">Tonight 11pm</button>
+        <button data-tomorrow="12">Tomorrow noon</button>
+        <button data-tomorrow="18">Tomorrow 6pm</button>
+      </div>
+      <div class="note">Hard stop. It quits then whether or not it found anything.</div>
+    </div>
+
+    <div class="row">
+      <label class="arm">
+        <input type="checkbox" id="arm">
+        <span class="t"><b>Arm the real claim</b>
+          <span>Off = dry run: it detects a ticket and pushes your phone, but does not claim.
+          On = it claims the first ticket it sees, on your account, for real.</span></span>
+      </label>
+    </div>
+
+    <div class="actions">
+      <button class="btn go" id="start">Start watching</button>
+      <button class="btn stop" id="stop" disabled>Stop</button>
+    </div>
+    <div class="err" id="err"></div>
+  </div>
+
+  <div class="panel status">
+    <div><span>Status</span><b id="sStatus">idle</b></div>
+    <div><span>Polls</span><b id="sPolls">0</b></div>
+    <div><span>Mode</span><b id="sMode">&mdash;</b></div>
+    <div><span>Time left</span><b id="sLeft">&mdash;</b></div>
+  </div>
+
+  <div id="log"></div>
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+let state = {};
+
+const pad = (n) => String(n).padStart(2, '0');
+function toLocalInput(d) {
+  return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate())
+    + 'T' + pad(d.getHours()) + ':' + pad(d.getMinutes());
+}
+
+for (const b of document.querySelectorAll('.presets button')) {
+  b.addEventListener('click', () => {
+    const d = new Date();
+    if (b.dataset.h) d.setHours(d.getHours() + Number(b.dataset.h));
+    if (b.dataset.tonight) d.setHours(Number(b.dataset.tonight), 0, 0, 0);
+    if (b.dataset.tomorrow) { d.setDate(d.getDate() + 1); d.setHours(Number(b.dataset.tomorrow), 0, 0, 0); }
+    $('stopAt').value = toLocalInput(d);
+  });
+}
+
+function esc(s) {
+  return String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+}
+
+async function loadEvents() {
+  const sel = $('event');
+  sel.innerHTML = '<option>loading...</option>';
+  try {
+    const d = await (await fetch('/api/events')).json();
+    if (d.events && d.events.length) {
+      sel.innerHTML = d.events.map((e) =>
+        '<option value="' + esc(e.id) + '" data-name="' + esc(e.name) + '">'
+        + esc(e.name) + (e.when ? ' &mdash; ' + esc(e.when) : '') + '</option>').join('');
+      $('eventNote').textContent = d.events.length + ' claimable event(s) from your account.';
+      $('eventManual').style.display = 'none';
+    } else {
+      sel.innerHTML = '<option value="">-- enter manually --</option>';
+      $('eventManual').style.display = 'block';
+      $('eventNote').textContent = d.error ? 'Could not list events: ' + d.error : 'No claimable events found.';
+    }
+  } catch (e) {
+    sel.innerHTML = '<option value="">-- enter manually --</option>';
+    $('eventManual').style.display = 'block';
+    $('eventNote').textContent = 'Could not reach the server.';
+  }
+}
+
+function chosenEvent() {
+  const opt = $('event').selectedOptions[0];
+  if (opt && opt.value) return { id: opt.value, name: opt.dataset.name || opt.textContent };
+  const manual = $('eventManual').value.trim();
+  return manual ? { id: manual, name: manual } : null;
+}
+
+function render() {
+  $('siteBadge').textContent = state.siteKind === 'fake' ? 'fake site' : 'live site';
+  $('siteBadge').className = 'badge ' + (state.siteKind === 'fake' ? 'fake' : 'live');
+  $('notifyBadge').textContent = state.notifyConfigured ? 'push on' : 'push off';
+  $('notifyBadge').className = 'badge' + (state.notifyConfigured ? ' live' : '');
+
+  $('sStatus').textContent = state.running ? 'watching' : (state.outcome || 'idle');
+  $('sPolls').textContent = state.polls || 0;
+  $('sMode').textContent = state.running ? (state.dryRun ? 'dry run' : 'ARMED') : '—';
+
+  if (state.running && state.stopAt) {
+    const ms = state.stopAt - Date.now();
+    const h = Math.floor(ms / 3600000);
+    const m = Math.floor(ms / 60000) % 60;
+    $('sLeft').textContent = ms <= 0 ? '0m' : (h ? h + 'h ' + m + 'm' : m + 'm');
+  } else {
+    $('sLeft').textContent = '—';
+  }
+
+  $('start').disabled = !!state.running;
+  $('stop').disabled = !state.running;
+  for (const el of ['event', 'eventManual', 'stopAt', 'arm']) $(el).disabled = !!state.running;
+}
+
+async function refresh() {
+  try { state = await (await fetch('/api/status')).json(); render(); } catch (e) {}
+}
+
+$('start').addEventListener('click', async () => {
+  $('err').textContent = '';
+  const event = chosenEvent();
+  if (!event) { $('err').textContent = 'Pick an event first.'; return; }
+  if (!$('stopAt').value) { $('err').textContent = 'Set a stop time.'; return; }
+  const body = { event, stopAt: new Date($('stopAt').value).toISOString(), dryRun: !$('arm').checked };
+  const r = await fetch('/api/start', {
+    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
+  });
+  const d = await r.json();
+  if (!r.ok) { $('err').textContent = d.error; return; }
+  state = d;
+  render();
+});
+
+$('stop').addEventListener('click', async () => {
+  const r = await fetch('/api/stop', { method: 'POST' });
+  const d = await r.json();
+  if (!r.ok) $('err').textContent = d.error;
+});
+
+const logEl = $('log');
+const es = new EventSource('/api/logs');
+es.onmessage = (m) => {
+  const e = JSON.parse(m.data);
+  const atBottom = logEl.scrollHeight - logEl.scrollTop - logEl.clientHeight < 40;
+  const div = document.createElement('div');
+  div.className = 'l-' + e.level;
+  div.innerHTML = '<span class="t-dim">' + new Date(e.at).toLocaleTimeString() + '</span> ' + esc(e.message);
+  logEl.appendChild(div);
+  while (logEl.children.length > 2000) logEl.removeChild(logEl.firstChild);
+  if (atBottom) logEl.scrollTop = logEl.scrollHeight;
+};
+
+$('stopAt').value = toLocalInput(new Date(Date.now() + 2 * 3600 * 1000));
+loadEvents();
+refresh();
+setInterval(refresh, 2000);
+</script>
+</body>
+</html>

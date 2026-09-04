@@ -103,22 +103,144 @@ pass revoked. Nothing here should touch resale or transfer.
 ```
 CLAUDE.md      this file
 README.md      setup instructions written for Daniel
-package.json   deps: playwright
-login.js       DONE — persistent-profile manual login
-record.js      DONE — recon recorder, dumps network + HTML to recon/<stamp>/
-.gitignore     ignores node_modules, .browser-profile, recon, config.local.json
+package.json   deps: playwright (only)
+config.json    poll window, port, notify server -- checked in, no secrets
+config.local.json          git-ignored overrides; the ntfy topic goes here
+config.local.example.json  copy it to the above
+login.js       DONE -- persistent-profile manual login
+record.js      DONE -- recon recorder, dumps network + HTML to recon/<stamp>/
+record-watch.js   DONE -- unattended recon: polls a claim page, archives any
+                  poll that differs from baseline, pushes on change
+lib/fingerprint.js DONE -- structural change detection + its normalizer
+server.js      DONE -- node:http control panel on 127.0.0.1, SSE log stream
+watcher.js     DONE -- poll loop, jitter, hard stop, claim, notify, self-terminate
+lib/config.js  DONE -- config load + merge, enforces the 5s poll floor
+lib/notify.js  DONE -- ntfy push
+lib/site.js    DONE -- adapter factory
+lib/site-fake.js  DONE -- fake site, so the whole path runs without BYU
+lib/site-byu.js   SKELETON -- everything site-specific is in its RECON block
+claim.js       DONE -- the claim transaction: finds the control by label
+               against an allowlist, walks confirm steps, verifies success
+public/index.html DONE -- picker, stop time, arm switch, Start/Stop, live log
+test/watcher.test.js      DONE -- 13 tests, fake clock, no network
+test/fingerprint.test.js  DONE -- 11 tests pinning what counts as a change
+test/claim.test.js        DONE -- 13 tests, real Chromium, real clicks
 ```
-
-Nothing has been run yet. `npm install` has not happened on this machine.
 
 - [x] `login.js`
 - [x] `record.js`
-- [ ] Availability detector — **blocked on reading a recon dump**
-- [ ] Auto-claim
-- [ ] Notification
-- [ ] Local web UI
+- [x] Watcher loop, hard stop, session-expiry detection, error backoff
+- [x] Notification (ntfy)
+- [x] Local web UI
+- [x] Tests + a fake site (`npm run demo`) that exercises the whole path
+- [x] Unattended recon capture (`npm run record:watch`)
+- [ ] **Availability detector -- still blocked on reading a recon dump**
+- [x] Claim transaction (`claim.js`) -- generic, tested against real DOM
+- [ ] **Pointing the claim at the real page -- needs the same recon dump**
 
----
+`npm install` and `npx playwright install chromium` have both been run on this
+machine. `npm test` passes (42 tests, 13 of them driving real headless Chromium). `npm run demo` was driven end to end
+against the fake site: start rejections, double-start, SSE log, armed claim,
+notification text. None of it has touched BYU yet.
+
+Everything that is not BYU-specific is done. What remains is one block of one
+file: `RECON` at the top of `lib/site-byu.js`. Fill it in from a recording and
+flip `configured: true`. Until then the real adapter refuses to open and says
+so, which is on purpose -- guessing selectors against a live ticketing system
+is how you click the wrong button once.
+
+### On catching an "available" state (raised 2026-09-03)
+
+Daniel said he cannot reliably catch a ticket in the act -- they go too fast to
+sit and record one by hand. Section 7 assumed he could. He cannot, so recon
+gets captured by machine instead:
+
+1. **`npm run record:watch`.** He navigates to the claim page once and presses
+   Enter; it then polls at the normal 8-12s interval, fingerprints each load,
+   and permanently archives any poll that differs from the baseline. It knows
+   nothing about the page structure -- detection is purely structural -- so it
+   works before the detector exists. Verified against a local page that churned
+   its csrf/timestamp/request-id on every load and showed a ticket for exactly
+   one poll: 6 polls collapsed to 2 fingerprints, the one-poll ticket was
+   caught, and the saved diff was the single line `0 available` -> `1
+   available`.
+
+2. **An event that is already claimable is a free positive sample.** He does
+   not need a returned football ticket. Olympic-sport claims open 2 p.m. day-of
+   and stay open until the ROC fills, so those sit claimable for hours. A plain
+   `npm run record` on one of those captures the "available" state with no race
+   at all.
+
+Note that `record-watch.js` is already a working notify-only watcher for the
+real site, since change-detection needs no site knowledge. If Daniel wants
+something useful before the detector lands, that is it.
+
+**This does not justify polling faster.** If returns are being taken within
+seconds, an 8-12s poll loses some races -- but it wins every return that lands
+while nobody else is refreshing, which is the case he currently loses 100% of.
+The edge here is uptime, not reaction time. The place where speed legitimately
+matters is *after* detection: keep the session warm and make the claim a direct
+request rather than a page navigation, so time-to-claim is short once a ticket
+is seen. Optimize that, not the poll interval.
+
+### On auto-clicking the claim (asked 2026-09-04)
+
+Daniel confirmed a returned ticket is visible for roughly one poll and that a
+human who is looking can click it in time. That is good news and it resolves an
+open worry: the ticket lives for *seconds*, not milliseconds, so an 8-12s poll
+will land on one. Detection was never the hard part. Time-to-claim after
+detection is.
+
+`claim.js` is that transaction. It is deliberately generic -- it does not know
+what BYU's page looks like -- and it is built around three ideas:
+
+**Speed.** It runs against the page the availability check already loaded. No
+second navigation, no re-render, no networkidle wait. All candidate controls
+are read in one batched `$$eval`. Measured under 1s end to end including a
+confirm step; a test pins that.
+
+**An allowlist, never a guess.** A control is clicked only if its label matches
+`claim.allowText`. Nothing is clicked speculatively.
+
+**A refusal list that aborts.** ROC claims are free, so a control reading
+"purchase", "buy", "pay", "checkout" or "$" means we are in the wrong flow, and
+the right move is to stop rather than find out what it does. "Transfer",
+"resell" and "resale" are on that list too -- ROC rules prohibit both and doing
+it can get the pass revoked. The check runs twice: once when scanning, and
+again against the live element immediately before the click, which catches a
+page that re-rendered underneath us.
+
+It also solves the "the claim path is untestable" problem from section 10.
+**Dry run now walks the whole claim path and stops at the click**, reporting
+the exact element it would have hit ("would have clicked <button.claim-btn>
+'Claim Ticket'"). So when `record:watch` or a dry-run watch catches a real
+returned ticket, the log says precisely what the armed run would do -- the
+claim gets validated against a real ticket without spending one. Read that line
+before arming.
+
+One honest gap: if the page never confirms success, the result is reported as
+`verified: false` and the push says CHECK YOUR ACCOUNT rather than claiming a
+success we cannot see.
+
+### On deploying this (asked 2026-09-03, answered: no)
+
+Daniel asked whether this could be a live deployed website. It cannot, and the
+reasons are worth keeping so it does not get re-litigated:
+
+1. Claiming needs his authenticated eVenue/Paciolan session. Hosting it means
+   putting either his password or exportable session cookies on someone else's
+   machine. The password is a firm no (section 4); the cookies expire with no
+   browser for him to re-auth in.
+2. Playwright/Chromium does not run on Vercel functions, and a 30-hour stateful
+   poll loop is not a serverless shape -- functions cap out in minutes.
+3. A datacenter IP driving his account for 30 hours is the most flaggable
+   version of this. His own browser on his own network is unremarkable.
+
+What he gets instead: `npm run tunnel` (`cloudflared tunnel --url
+http://localhost:4321`) puts a real https URL in front of the local UI, free
+and no signup, so he can start and stop it from his phone. The session never
+leaves his machine. Add ntfy push and it behaves like a deployed app without
+being one.
 
 ## 7. The immediate next step, and the fork it resolves
 

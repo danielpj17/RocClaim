@@ -1,0 +1,22 @@
+{
+  "port": 4321,
+  "pollMinMs": 8000,
+  "pollMaxMs": 12000,
+  "dryRun": true,
+  "startUrl": "https://byutickets.com",
+  "notify": {
+    "server": "https://ntfy.sh",
+    "topic": ""
+  },
+  "maxConsecutiveErrors": 8,
+  "sessionCheckEveryPolls": 20,
+  "claim": {
+    "selector": "",
+    "allowText": "\\b(claim|accept)\\b",
+    "confirmText": "\\b(confirm|continue|submit|yes|complete|finish)\\b",
+    "successText": "(claimed|confirmed|you'?re going|see you|your ticket|success)",
+    "forbiddenText": "(purchase|buy|pay|checkout|price|\\$|credit card|transfer|resell|resale|sell|donate|renew)",
+    "maxConfirmSteps": 3,
+    "stepTimeoutMs": 4000
+  }
+}
