@@ -113,12 +113,45 @@ repeat the claim that the page "can never" be captured.
   reads a DevTools HAR and prints the interesting calls with cookies, tokens
   and auth headers redacted. HARs go in `recon/` and are git-ignored — a HAR
   saved "with content" carries a live session; never commit one.
-- **Poll at 20-30s, not 8-12s** (`config.json` updated). A seat search is a
-  heavier, write-ish action than a page reload: 8-12s over a 30-hour football
-  window is ~13,000 seat searches against their system versus a couple hundred
-  when he does it by hand. Section 5's reasoning about not getting flagged
-  applies harder here than it did to reloading. A returned ticket sits in
-  inventory until someone takes it; it does not evaporate in ten seconds.
+- **Poll at 30-45s, not 8-12s.** A seat search is a heavier, write-ish action
+  than a page reload: 8-12s over a 30-hour football window is ~13,000 seat
+  searches against their system versus a couple hundred when he does it by
+  hand. Section 5's reasoning about not getting flagged applies harder here
+  than it did to reloading. A returned ticket sits in inventory until someone
+  takes it; it does not evaporate in ten seconds. (Chosen as 20-30s, then
+  raised to 30-45s by the alarm floor -- see below.)
+
+### The poll clock lives in the service worker, not the page
+
+Chrome intensively throttles timers in hidden tabs -- after about five minutes
+hidden they run roughly once a minute -- and the loop used to hang off a single
+`setTimeout` in the content script. An unattended watch runs, by definition, in
+a tab nobody is looking at, so the cadence would have quietly halved with
+nothing to signal it: `STALL_MS` is long enough that a 60s cycle still reads as
+perfectly healthy to the watchdog.
+
+So each cycle now asks `background.js` to book the next one
+(`{type:'schedule-poll'}`), and a one-shot `chrome.alarms` entry reloads the
+armed tab when it comes due. Alarms are not subject to tab throttling.
+
+**The cost, and why the interval moved again:** Chrome clamps alarms to a
+30-second floor. Anything scheduled below that silently becomes 30s, so the
+range starts at the floor -- `POLL_MIN_MS` 30s, `POLL_MAX_MS` 45s -- rather
+than pretending to be faster than the clock is. A test asserts the range never
+dips under `ALARM_FLOOR_MS`, and another asserts `STALL_MS` stays at least 2.5
+worst-case cycles above it, because those two numbers drifting apart is what
+makes the watchdog reload a tab out from under a probe that is still working.
+
+Both alarms are cleared together when the watch stops. A poll alarm outliving
+the watch would reload his tab out of nowhere minutes after he pressed Stop.
+
+**Measured in real Chrome:** 6 consecutive cycles at 31-42s, average 36.5s,
+driven entirely by the worker alarm. **Not** measured: whether this survives
+actual tab throttling -- headless Chrome reports the backgrounded tab as
+`visible`, so the condition never arose. An earlier test claimed to prove this
+and did not; its premise had failed and it reported success anyway. If it
+matters, measure it on the real thing: note the check count, switch tabs for
+ten minutes, look again.
 
 ## 0.6. The DOM probe (built 2026-09-04, deliberately scrappable)
 
@@ -780,12 +813,12 @@ countdown is not a change, "COMING SOON" becoming "Buy" *is*, and
 
 ## 13. Test suite
 
-**94 tests, all passing** (`npm test`), 39 of them driving real headless
+**98 tests, all passing** (`npm test`), 39 of them driving real headless
 Chromium against real DOM.
 
 - `test/watcher.test.js` — 16, fake clock, no network
 - `test/fingerprint.test.js` — 14, what counts as a change
-- `test/extension.test.js` — 30, the live path. Nine pin the watchdog verdict,
+- `test/extension.test.js` — 34, the live path. Nine pin the watchdog verdict,
   seven pin claim detection against real Chromium DOM (a nav Buy link never
   fires; a `<header>`-wrapped Buy is not excluded; a disabled Buy becoming
   enabled does fire), and one asserts the normalizer copy has not drifted from
