@@ -51,6 +51,11 @@ var ROCProbeDom = (function () {
     // Also from the live page. The probe clicked this for a while, believing it
     // was the stepper; naming it makes that impossible by construction.
     neverClick: '[data-testid="more-info-modal"], #hamburger-button',
+    // The quantity section, straight from the live DOM. Scoping the stepper
+    // hunt to this subtree is what makes a structural guess safe: there is
+    // nothing inside it but the readout and its two controls, so the worst case
+    // is clicking a decrement, not a checkout.
+    quantitySection: '#qtySection, [data-testid="event-panel-quantity-selector"]',
     nothingSelected: /no tickets selected/i,
     // The answer we are polling for.
     seatsNotFound: /seats not found|no seats that matched/i,
@@ -95,13 +100,18 @@ var ROCProbeDom = (function () {
       // The markup around the quantity readout. The stepper turned out not to be
       // a button at all, so a list of buttons could never have shown it -- this
       // makes the next unreadable page diagnose itself.
+      // The quantity section itself, not four ancestors above it. The previous
+      // version climbed the tree first and spent its whole budget on wrappers,
+      // truncating one character before the stepper markup.
       quantityRow: (function () {
+        const sec = document.querySelector(SELECTORS.quantitySection);
+        if (sec) return (sec.outerHTML || '').replace(/\s+/g, ' ').slice(0, 4000);
         const label = Array.from(document.querySelectorAll('div, span, p, h1, h2, h3, h4'))
           .find((e) => !e.children.length && /^quantity$/i.test((e.textContent || '').trim()));
         if (!label) return null;
         let c = label;
-        for (let i = 0; i < 4 && c.parentElement; i++) c = c.parentElement;
-        return (c.outerHTML || '').replace(/\s+/g, ' ').slice(0, 1200);
+        for (let i = 0; i < 3 && c.parentElement; i++) c = c.parentElement;
+        return (c.outerHTML || '').replace(/\s+/g, ' ').slice(0, 4000);
       })(),
       controls: els.map((el) => ({
         tag: el.tagName,
@@ -151,54 +161,64 @@ var ROCProbeDom = (function () {
   const GLYPHY = /^.{0,2}$/;
 
   function findIncrementStructurally() {
-    // The live DOM dump settled this: the quantity stepper is not a <button>,
-    // not an <a>, and has no role=button -- it never appeared in the candidate
-    // list at all. So it is found geometrically instead of by tag or name.
+    // The stepper is not a <button>, not an <a>, and has no role=button -- it
+    // never appears in CONTROL_SELECTOR at all, so it cannot be found by tag or
+    // by name. It is found by position inside the quantity section instead.
     //
-    // A stepper looks like exactly one thing on every site that has ever had
-    // one: a bare number with a small square control on each side of it, all on
-    // the same line. Find the number, then take the nearest small control to
-    // its RIGHT.
-    const qty = [];
-    const all = document.querySelectorAll('div, span, p, li, td, strong, b');
-    for (const el of all) {
-      if (el.children.length) continue;
-      if (!/^\s*\d{1,3}\s*$/.test(el.textContent || '')) continue;
+    // Scoping to #qtySection is what makes that acceptable. Guessing at a
+    // control anywhere on the page would be reckless; guessing inside a subtree
+    // that contains only a number and its two adjustors is not. The worst
+    // outcome in there is clicking the decrement, which does nothing harmful.
+    const section = document.querySelector(SELECTORS.quantitySection);
+    const scope = section || document.body;
+    if (!scope) return null;
+
+    // The readout: a bare integer, either as text or as an input value.
+    let readout = null;
+    for (const el of scope.querySelectorAll('*')) {
+      const isInput = el.tagName === 'INPUT';
+      const val = isInput ? el.value : (el.children.length ? '' : el.textContent);
+      if (!/^\s*\d{1,3}\s*$/.test(val || '')) continue;
       const r = el.getBoundingClientRect();
-      if (r.width > 0 && r.height > 0) qty.push({ el, r });
+      if (r.width > 0 && r.height > 0) { readout = { el, r }; break; }
     }
 
-    for (const { r: qr } of qty) {
-      const midY = qr.top + qr.height / 2;
-      let best = null;
-
-      for (const el of document.querySelectorAll('*')) {
-        const r = el.getBoundingClientRect();
-        // Small and roughly square: an icon control, not a panel or a wide
-        // worded button.
-        if (r.width < 16 || r.width > 72 || r.height < 16 || r.height > 72) continue;
-        if (Math.abs(r.width - r.height) > 24) continue;
-        // On the same line as the number, and to the right of it.
-        if (Math.abs(r.top + r.height / 2 - midY) > 18) continue;
-        if (r.left < qr.right) continue;
-        if (r.left - qr.right > 140) continue;
-        // Never a worded control. An icon has no text; this is the fence that
-        // keeps "Checkout" or "More Info" out of a structural guess.
-        const label = labelOf(el);
-        if (label && !GLYPHY.test(label)) continue;
-        if (label && NEVER.test(label)) continue;
-        if (el.closest && SELECTORS.neverClick && el.closest(SELECTORS.neverClick)) continue;
-        if (!usable(el)) continue;
-
-        // Prefer the outermost element of a nested icon (a div wrapping an svg
-        // wrapping a path): the click handler lives on the outer one.
-        if (!best || r.left < best.r.left || (r.left === best.r.left && r.width > best.r.width)) {
-          best = { el, r };
-        }
-      }
-      if (best) return best.el;
+    // Small, roughly square, wordless, visible: an icon control.
+    const candidates = [];
+    for (const el of scope.querySelectorAll('*')) {
+      const r = el.getBoundingClientRect();
+      if (r.width < 14 || r.width > 96 || r.height < 14 || r.height > 96) continue;
+      if (Math.abs(r.width - r.height) > 30) continue;
+      const label = labelOf(el);
+      if (label && !GLYPHY.test(label)) continue;
+      if (label && NEVER.test(label)) continue;
+      if (el.closest && SELECTORS.neverClick && el.closest(SELECTORS.neverClick)) continue;
+      if (!usable(el)) continue;
+      if (readout && el === readout.el) continue;
+      candidates.push({ el, r });
     }
-    return null;
+    if (!candidates.length) return null;
+
+    // Prefer an outer wrapper over the icon nested inside it: the click handler
+    // sits on the outer element, and clicking an inner <path> can miss it.
+    const outermost = candidates.filter(
+      (c) => !candidates.some((o) => o.el !== c.el && o.el.contains(c.el))
+    );
+    const pool = outermost.length ? outermost : candidates;
+
+    if (readout) {
+      // On the same line, to the right of the number: that is the increment.
+      const midY = readout.r.top + readout.r.height / 2;
+      const right = pool
+        .filter((c) => Math.abs(c.r.top + c.r.height / 2 - midY) <= 24)
+        .filter((c) => c.r.left >= readout.r.right - 2)
+        .sort((a, b) => a.r.left - b.r.left);
+      if (right.length) return right[0].el;
+    }
+
+    // No readout found. Inside the quantity section the rightmost small control
+    // is still the increment.
+    return pool.sort((a, b) => b.r.left - a.r.left)[0].el;
   }
 
   function findControl(match, { requireUsable = true } = {}) {

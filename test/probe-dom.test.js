@@ -291,14 +291,18 @@ function livePage(opts = {}) {
     <h3>Zones*</h3>
     <p>Any fees and contributions are included in the price.</p>
     <p>ROC</p>
-    <h3>Quantity</h3>
-    <p>Must be a minimum of 1, up to 1</p>
-    <div style="display:flex;align-items:center;gap:14px;padding:16px;border:1px solid #ddd">
-      <span style="flex:1">ROC</span>
-      <div id="minus" style="width:32px;height:32px;border-radius:50%;background:#eee"><svg width="12" height="12"></svg></div>
-      <span id="qty" style="width:20px;text-align:center">0</span>
-      <div id="plus" style="width:32px;height:32px;border-radius:50%;background:#002E5D"><svg width="12" height="12"></svg></div>
-    </div>
+    <section id="qtySection" data-testid="event-panel-quantity-selector">
+      <h3>Quantity</h3>
+      <p>Must be a minimum of 1, up to 1</p>
+      <div style="display:flex;align-items:center;gap:14px;padding:16px;border:1px solid #ddd">
+        <span style="flex:1">ROC</span>
+        <div id="minus" style="width:32px;height:32px;border-radius:50%;background:#eee"><svg width="12" height="12"></svg></div>
+        ${opts.inputQty
+          ? '<input id="qty" value="0" readonly style="width:24px;text-align:center;border:none">'
+          : '<span id="qty" style="width:20px;text-align:center">0</span>'}
+        <div id="plus" style="width:32px;height:32px;border-radius:50%;background:#002E5D"><svg width="12" height="12"></svg></div>
+      </div>
+    </section>
     <div>$0.00</div>
     <button data-testid="add-to-cart-btn" disabled tabindex="0" id="primary">No Tickets Selected</button>
   </div>
@@ -314,7 +318,8 @@ function livePage(opts = {}) {
       if (el) window.__clicks.push(el.id || (el.innerText || '').replace(/\\s+/g,' ').trim());
     }, true);
     document.getElementById('plus').addEventListener('click', () => {
-      document.getElementById('qty').textContent = '1';
+      const q = document.getElementById('qty');
+      if (q.tagName === 'INPUT') q.value = '1'; else q.textContent = '1';
       const p = document.getElementById('primary');
       p.disabled = false; p.textContent = 'Find Best Available';
     });
@@ -337,6 +342,26 @@ test('LIVE DOM: the div stepper is found and the search runs', async () => {
   assert.ok(clicks.includes('plus'), 'must click the div stepper: ' + JSON.stringify(clicks));
   // The recorder logs element ids, and the search button's id is 'primary'.
   assert.ok(clicks.includes('primary'), 'must run the search: ' + JSON.stringify(clicks));
+});
+
+test('LIVE DOM: a quantity held in an input, not a text node, still works', async () => {
+  // An <input value="0"> has no textContent, so a text-only scan finds no
+  // readout at all. Scoping to #qtySection is what saves this case.
+  const { result, clicks } = await probe(livePage({ inputQty: true }));
+  assert.equal(result.state, 'unavailable', JSON.stringify(result).slice(0, 300));
+  assert.ok(clicks.includes('plus'), JSON.stringify(clicks));
+});
+
+test('LIVE DOM: nothing outside the quantity section is ever a stepper candidate', async () => {
+  // Put a small square control elsewhere on the page and make sure the scoped
+  // search cannot wander to it.
+  const html = livePage().replace(
+    '<a href="/myaccount/sitesecurity">Site Security</a>',
+    '<div id="decoy" style="width:32px;height:32px;background:red"></div>' +
+    '<a href="/myaccount/sitesecurity">Site Security</a>'
+  );
+  const { clicks } = await probe(html);
+  assert.ok(!clicks.includes('decoy'), 'wandered outside the section: ' + JSON.stringify(clicks));
 });
 
 test('LIVE DOM: neither More Info nor the hamburger is ever clicked', async () => {
