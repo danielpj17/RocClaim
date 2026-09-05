@@ -204,10 +204,56 @@ only the HAR or a saved page can.
 
 ---
 
-**Still unknown:** what the page does when a seat *is* found — whether "Find
-Best Available" puts it in a cart with a hold timer. That decides whether
-stopping there and pushing him is already most of a claim. Ask before building
-the auto-click.
+## 0.7. ANSWERED: a found seat is held in a cart for 10 minutes
+
+From a HAR Daniel captured on 2026-09-04 of a **successful** claim (women's
+volleyball, `WVB26`/`E03`, BYU vs Pittsburgh — Olympic-sport claims sit open
+for hours, which is why that one was catchable). Saved as `recon/success.har`,
+git-ignored: it carries a live session.
+
+This was the question blocking the auto-click decision, and the answer is
+decisive:
+
+```
+cart_detail request   2026-09-04T23:57:19Z
+expireAt              2026-09-05T00:07:16Z
+                      -> a 10.0 minute hold
+```
+
+**"Find Best Available" reserves the seat into a cart with a ten-minute
+timer.** So notify-only is genuinely useful even when he is away from the
+laptop — an urgent push buys him ten minutes to get back and finish, rather
+than being a message about a ticket someone else already took. **Auto-click is
+therefore a convenience, not a necessity.** Do not treat it as urgent.
+
+The whole thing is Paciolan behind `/pac-api/`, GraphQL at
+`POST /pac-api/consumer/gql`. The cart query is
+`query($cartId: String!) { cart_detail(cartId: $cartId) { ... } }`.
+
+**Every money field is zero**, at every level — exactly the affirmative
+evidence the price gate wants:
+
+```
+cartAmt 0 - amtDue 0 - totalTaxAmt 0 - orderCharges []
+deliveryFeeAmt 0 - ticketFeeAmt 0 - facilityFeeAmt 0
+seat: { seatingType GA, ls "BYU:ROC", r 34, s 36, pl 6, pt "ROC", total 0, cost 0 }
+delivery: Mobile Delivery, amount 0
+```
+
+**It also validates the probe's success detection by accident.** A successful
+search navigates to `byutickets.evenue.net/cart` ("Review Order"). The probe
+treats a URL change as `available`, so the real success path trips it
+correctly — and `content.js` bails on `/cart` because it is not the armed
+URL, so nothing keeps running there.
+
+Event URLs are `/students/event/<seasonCd>/<itemCd>` — `F26/E01` for the
+football game, `WVB26/E03` for this volleyball one.
+
+**What this HAR does NOT contain:** the seat-search request itself. The capture
+starts on the cart page — no document loads, and only three `/pac-api/` calls,
+all cart/account/authz. To build the API detector we still need a capture made
+**on the event page, with Preserve log ticked before clicking Find Best
+Available**. Until then the DOM probe (section 0.6) is the detector.
 
 ---
 

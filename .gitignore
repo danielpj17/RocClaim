@@ -6,3 +6,4 @@ config.local.json
 logs/
 .login-done
 .record-done
+*.har
