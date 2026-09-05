@@ -1,0 +1,98 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <style>
+      :root { color-scheme: light dark; }
+      body {
+        width: 320px;
+        margin: 0;
+        padding: 14px;
+        font: 13px/1.45 system-ui, -apple-system, Segoe UI, sans-serif;
+      }
+      h1 { font-size: 14px; margin: 0 0 2px; }
+      .sub { font-size: 11px; opacity: .6; margin-bottom: 10px; }
+      label { display: block; margin: 10px 0 3px; font-weight: 600; font-size: 12px; }
+      input {
+        width: 100%;
+        box-sizing: border-box;
+        padding: 6px 7px;
+        font: inherit;
+        border: 1px solid #8884;
+        border-radius: 5px;
+        background: #8881;
+        color: inherit;
+      }
+      .row { display: flex; gap: 8px; margin-top: 12px; }
+      button {
+        flex: 1;
+        padding: 8px;
+        font: inherit;
+        font-weight: 600;
+        border: 0;
+        border-radius: 5px;
+        cursor: pointer;
+      }
+      #start { background: #0a7d3c; color: #fff; }
+      #stop { background: #8883; color: inherit; }
+      #test { background: #8883; color: inherit; flex: 0 0 auto; padding: 8px 10px; font-weight: 400; }
+      .status {
+        margin-top: 12px;
+        padding: 9px 10px;
+        border-radius: 6px;
+        background: #8881;
+        font-size: 12px;
+      }
+      .on { color: #0a7d3c; font-weight: 700; }
+      .off { color: #a33; font-weight: 700; }
+      .muted { opacity: .65; }
+      .hint { font-size: 11px; opacity: .65; margin-top: 3px; }
+      .warn {
+        margin-top: 10px;
+        font-size: 11px;
+        padding: 8px;
+        border-radius: 5px;
+        background: #f5a62322;
+        border: 1px solid #f5a62366;
+      }
+      #log {
+        margin-top: 10px;
+        max-height: 110px;
+        overflow-y: auto;
+        font-size: 11px;
+        font-family: ui-monospace, Consolas, monospace;
+        opacity: .75;
+        white-space: pre-wrap;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>ROC API Watcher</h1>
+    <div class="sub">Asks BYU's seat-search endpoint directly. No page reloading.</div>
+
+    <label for="topic">ntfy topic</label>
+    <input id="topic" placeholder="roc-..." />
+
+    <label for="stop-at">Stop at</label>
+    <input id="stop-at" type="datetime-local" />
+    <div class="hint">Hard stop. Don't leave it running past when you'd actually go.</div>
+
+    <div class="row">
+      <button id="start">Watch this event</button>
+      <button id="stop">Stop</button>
+      <button id="test" title="Send a test push">Test</button>
+    </div>
+
+    <div class="status" id="status">…</div>
+
+    <div class="warn">
+      A found seat is <b>reserved in your cart for ~10 minutes</b> — the search
+      and the reservation are the same request, there is no lighter way to ask.
+      It never sends the checkout; you finish that yourself.
+    </div>
+
+    <div id="log"></div>
+    <script src="api.js"></script>
+    <script src="popup.js"></script>
+  </body>
+</html>

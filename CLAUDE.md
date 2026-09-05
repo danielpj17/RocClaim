@@ -347,6 +347,74 @@ search that finds nothing.
 
 ---
 
+## 0.9. The API watcher — a SECOND extension, on purpose (2026-09-04)
+
+`extension-api/`, loaded unpacked alongside `extension/`. Daniel asked for it
+separate so the two detection models do not blur together, and that turned out
+to be the right call for a reason beyond preference: **the API path deletes most
+of the machinery rather than swapping one file.**
+
+No page reloads, no render waits, no clicking, no stepper hunting, no
+outcome-inferred-from-a-repaint. The DOM extension is large because DOM
+automation is fragile. This one asks a server a question and reads the answer.
+
+```
+extension-api/manifest.json  MV3. Content script only on /students/event/*
+extension-api/api.js         PURE. The whole protocol, testable in plain node:
+                             URL parsing, token extraction, the price gate, the
+                             request bodies, the classification of the answer
+extension-api/content.js     ~25 lines. Reads "pacAuthz" out of the page HTML
+                             and hands it to the worker. That is its entire job
+extension-api/background.js  the loop: alarm, one request, read, act. Plus the
+                             push, the hard stop and a watchdog
+extension-api/popup.html/.js topic, stop time, Watch this event / Stop / Test
+```
+
+**What it does differently, and why each one matters:**
+
+- **The free-ticket gate is server-side numbers, not a rendered string.**
+  `discovery_eventDetailMPT` gives `PRICE`, `FACILITY_FEE` and
+  `PER_TICKET_FEE` as numbers before anything is attempted. Section 5's rule
+  is unchanged — absence of a price is not evidence of free — but this is an
+  affirmative zero rather than the absence of a dollar sign. It runs *before*
+  the first seat search, so a paid event is refused without ever asking to
+  reserve anything. A test asserts zero searches are sent in that case.
+- **A paid tier alongside ROC cannot contaminate the criteria.** The gate picks
+  the ROC price type when one exists and asks only for that; if there is no ROC
+  type among several it refuses rather than guessing.
+- **The seat search is the reservation.** There is no lighter way to ask
+  (section 0.8), so a success holds the seat for ten minutes and the watch stops
+  immediately. `checkout_cart` is never sent — and a test strips comments and
+  greps all four shipped files to prove it, verified by injecting a real
+  checkout call and watching it fail.
+- **`unknown` is preserved as a distinct state.** An HTTP or transport failure
+  is never read as "no seats". Five in a row stops the watch loudly, and the
+  first unreadable answer is stored in `lastRawAnswer` — it is very probably
+  the no-seats shape we still have not captured.
+
+**What is shared with the DOM extension:** the ntfy push, the stop-time check
+and the popup shell — about 120 lines, deliberately duplicated. Two copies of
+that is a better trade than one extension with two minds.
+
+**Tested:** `test/api.test.js` (18, pure, against the exact captured payloads)
+and `test/api-e2e.test.js` (10, the extension loaded in real Chrome). The
+content-script half runs against a real intercepted page; the worker half runs
+with `fetch` stubbed inside the worker, which is both how you reach a service
+worker's requests and how you guarantee no seat is ever really reserved by a
+test run.
+
+**Unverified:** it has never run against BYU. Two things to watch on the first
+real run — whether PerimeterX cares about the worker's XHR (it carries his
+cookies to the same origin, but it has no page context), and the no-seats
+response shape, which the code treats as "any clean answer without a cartId".
+
+**Which to run:** the DOM probe is proven against the real site and the API one
+is not. Until the API watcher has completed one real cycle, the DOM extension
+is the one to trust.
+
+
+---
+
 ## 1. What this is
 
 A watcher that monitors the BYU ROC **last-chance / returned-ticket** claim and
@@ -527,8 +595,8 @@ logs/          git-ignored: server/tunnel/recon output, pids, tunnel.url
       PerimeterX, see section 0. Not doable via Playwright.**
 - [ ] ~~Pointing the claim at the real page~~ — same blocker.
 - [x] Rebuild detection as a probe loop — `extension/probe-dom.js`, section 0.6
-- [ ] Capture the "Find Best Available" XHR (`tools/read-har.js`), then point
-      the watcher at it directly.
+- [x] Capture the seat-search XHR — done, section 0.8
+- [x] API detector — `extension-api/`, section 0.9
 - [ ] Auto-click — blocked on knowing what a successful seat search shows.
 
 `npm install` and `npx playwright install chromium` have both been run on this
@@ -949,7 +1017,7 @@ countdown is not a change, "COMING SOON" becoming "Buy" *is*, and
 
 ## 13. Test suite
 
-**98 tests, all passing** (`npm test`), 39 of them driving real headless
+**156 tests, all passing** (`npm test`), 49 of them driving real headless
 Chromium against real DOM.
 
 - `test/watcher.test.js` — 16, fake clock, no network
@@ -965,6 +1033,14 @@ Chromium against real DOM.
   evidence; refuses Buy at `$25.00`; a `$0.00` elsewhere does not excuse a
   `$15.00` on the same page; transfer stays refused even at `$0.00`; and a fee
   appearing at the confirm step aborts partway.
+- `test/api.test.js` — 18, the API detector's decisions against the exact
+  payloads captured in `recon/claim-success.har`
+- `test/api-e2e.test.js` — 10, that extension loaded in real Chrome with the
+  worker's fetch stubbed, so no request leaves the machine
+- `test/probe-dom.test.js` — 36, the DOM probe against a replica rebuilt from
+  live dumps
+- `test/popup.test.js` — 7, the popup loaded in real Chrome. It exists because
+  a syntax error there shipped while 100 other tests passed
 - `lib/config.test.js` — 2, config merge and the 5s poll floor
 
 The suite is worth more than usual here, because the parts it covers are the
