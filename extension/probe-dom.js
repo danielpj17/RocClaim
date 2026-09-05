@@ -25,9 +25,15 @@ var ROCProbeDom = (function () {
   const SELECTORS = {
     // The page is the right one when it shows the ticket picker.
     pageMarker: /select your tickets/i,
-    // Quantity stepper. The label is literally "+" in the screenshots; the
-    // aria variants are insurance until we have real DOM.
-    increment: { text: /^\+$/, aria: /increment|increase|plus|add(?! to)/i },
+    // Quantity stepper. It renders as a round icon button, so it may carry no
+    // text at all -- match on aria-label, title and class as well, and treat a
+    // lone "+" glyph in any of the unicode variants as a hit.
+    increment: {
+      text: /^[++＋➕]$/,
+      aria: /increment|increase|plus|add(?! to)|more|up/i,
+      title: /increment|increase|plus|add(?! to)|more/i,
+      cls: /(^|[-_ ])(plus|increment|increase|add|stepper-up|qty-up)([-_ ]|$)/i,
+    },
     // The primary button, in its two states.
     searchButton: /find best available/i,
     nothingSelected: /no tickets selected/i,
@@ -42,10 +48,17 @@ var ROCProbeDom = (function () {
 
   // Controls this strategy is allowed to touch. Anything not matching one of
   // these is never clicked, so a re-rendered page cannot lead it somewhere new.
+  // The label passed here may have come from the element's text OR its
+  // aria-label -- labelOf() falls back. So the stepper's every matcher has to
+  // be accepted, or an icon button labelled "Increase quantity" gets found and
+  // then refused, which stops the watch dead on a page that was working fine.
   function isAllowedControl(label) {
     if (!label || NEVER.test(label)) return false;
+    const inc = SELECTORS.increment;
     return (
-      SELECTORS.increment.text.test(label) ||
+      inc.text.test(label) ||
+      inc.aria.test(label) ||
+      inc.title.test(label) ||
       SELECTORS.searchButton.test(label) ||
       SELECTORS.modalDismiss.test(label)
     );
@@ -55,6 +68,24 @@ var ROCProbeDom = (function () {
     'button, a, input[type=submit], input[type=button], [role="button"]';
 
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+  // What the probe could see, for the times it could not make sense of it.
+  // Guessing selectors twice is worse than reporting once what is really there.
+  function snapshot(limit) {
+    const els = Array.from(document.querySelectorAll(CONTROL_SELECTOR)).slice(0, limit || 14);
+    return {
+      url: location.href,
+      marker: SELECTORS.pageMarker.test(document.body ? document.body.innerText : ''),
+      text: (document.body ? document.body.innerText : '').replace(/\s+/g, ' ').slice(0, 200),
+      controls: els.map((el) => ({
+        tag: el.tagName,
+        txt: labelOf(el).slice(0, 30),
+        aria: el.getAttribute('aria-label') || null,
+        cls: (typeof el.className === 'string' ? el.className : '').slice(0, 40),
+        dis: el.hasAttribute('disabled') || el.getAttribute('aria-disabled') === 'true',
+      })),
+    };
+  }
 
   function labelOf(el) {
     return (
@@ -81,10 +112,14 @@ var ROCProbeDom = (function () {
     for (const el of els) {
       const label = labelOf(el);
       const aria = el.getAttribute('aria-label') || '';
+      const title = el.getAttribute('title') || '';
+      const cls = typeof el.className === 'string' ? el.className : '';
       const hit =
+        (match instanceof RegExp && match.test(label)) ||
         (match.text && match.text.test(label)) ||
-        (match.aria && match.aria.test(aria)) ||
-        (match instanceof RegExp && match.test(label));
+        (match.aria && aria && match.aria.test(aria)) ||
+        (match.title && title && match.title.test(title)) ||
+        (match.cls && cls && match.cls.test(cls));
       if (!hit) continue;
       if (requireUsable && !usable(el)) continue;
       return el;
@@ -136,11 +171,22 @@ var ROCProbeDom = (function () {
 
     const bodyText = () => (document.body ? document.body.innerText : '');
 
+    // The portal is a React app and content scripts run at document_idle, which
+    // can fire before the app has painted. Reading the DOM at that instant sees
+    // an empty shell, decides the page is wrong, and reloads -- which looks
+    // exactly like "it refreshes but never clicks". So wait for the picker to
+    // actually exist before judging anything.
+    const readyBy = Date.now() + (opts.readyMs || 12000);
+    while (!SELECTORS.pageMarker.test(bodyText()) && Date.now() < readyBy) {
+      await sleep(250);
+    }
+
     if (!SELECTORS.pageMarker.test(bodyText())) {
       return {
         state: 'unknown',
-        detail: 'this does not look like the ticket picker page',
+        detail: 'the ticket picker never rendered',
         clicked: [],
+        snapshot: snapshot(),
       };
     }
 
@@ -164,6 +210,7 @@ var ROCProbeDom = (function () {
           state: 'unknown',
           detail: 'no quantity stepper and no search button -- the page shape changed',
           clicked,
+          snapshot: snapshot(),
         };
       }
       if (!isAllowedControl(labelOf(plus) || '+')) {
@@ -182,6 +229,7 @@ var ROCProbeDom = (function () {
         state: 'unknown',
         detail: 'the search button never became available after setting quantity',
         clicked,
+        snapshot: snapshot(),
       };
     }
 
@@ -237,6 +285,7 @@ var ROCProbeDom = (function () {
     isAllowedControl,
     priceVerdict,
     classifyOutcome,
+    snapshot,
     runCycle,
     // exported for tests
     findControl,

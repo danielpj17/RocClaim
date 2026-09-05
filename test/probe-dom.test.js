@@ -67,7 +67,10 @@ test('absence of a price is not evidence of free', () => {
 });
 
 test('only the stepper, the search and the modal dismiss are clickable', () => {
-  for (const ok of ['+', 'Find Best Available', 'OK', 'Close']) {
+  for (const ok of ['+', 'Find Best Available', 'OK', 'Close',
+                    // labelOf() falls back to aria-label, so an icon stepper
+                    // arrives here as its accessible name, not a "+" glyph.
+                    'Increase quantity', 'Add one more', 'Increment']) {
     assert.ok(P.isAllowedControl(ok), ok + ' must be allowed');
   }
   for (const no of ['Checkout', 'Buy Now', 'Transfer Ticket', 'Resell', 'Pay Now', 'Continue', 'Submit Order']) {
@@ -210,6 +213,29 @@ test('a transfer control on the page is never touched', async () => {
   );
   assert.equal(result.state, 'unavailable');
   assert.ok(!clicks.includes('Transfer Ticket'));
+});
+
+test('an icon-only stepper with an aria-label is found and clicked', async () => {
+  // The real page renders the stepper as a round icon button, so it may carry
+  // no text at all. This is the shape that made the first live run refresh
+  // forever without ever clicking.
+  const html = fixture().replace(
+    '<button id="plus">+</button>',
+    '<button id="plus" aria-label="Increase quantity"><svg width="10" height="10"></svg></button>'
+  );
+  const { result, clicks } = await probe(html);
+  assert.equal(result.state, 'unavailable');
+  assert.ok(clicks.length >= 2, 'must have clicked the stepper then the search: ' + JSON.stringify(clicks));
+});
+
+test('an unreadable page reports what it actually saw', async () => {
+  // So the next fix comes from real DOM rather than a second guess.
+  const { result } = await probe(fixture({ noMarker: true }));
+  assert.equal(result.state, 'unknown');
+  assert.ok(result.snapshot, 'a snapshot must be attached');
+  assert.equal(result.snapshot.marker, false);
+  assert.ok(Array.isArray(result.snapshot.controls) && result.snapshot.controls.length > 0);
+  assert.ok(typeof result.snapshot.text === 'string');
 });
 
 test('a page that is not the ticket picker is unknown, not unavailable', async () => {

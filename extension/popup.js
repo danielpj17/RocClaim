@@ -15,7 +15,7 @@ function localInputValue(d) {
 async function render() {
   const st = await get([
     'enabled', 'targetUrl', 'stopAt', 'polls', 'lastCheck',
-    'stoppedReason', 'stoppedAt', 'topic', 'log', 'lastResult', 'nextPollAt',
+    'stoppedReason', 'stoppedAt', 'topic', 'log', 'lastResult', 'nextPollAt', 'lastSnapshot',
   ]);
 
   if (st.topic && !$('topic').value) $('topic').value = st.topic;
@@ -41,6 +41,25 @@ async function render() {
     if (st.polls) bits.push(`${st.polls} checks total`);
   }
   $('status').innerHTML = bits.join('<br>');
+
+  // When the probe could not read the page, show it what it saw. This is the
+  // difference between "it is broken" and "here is the selector to fix".
+  const snap = st.lastSnapshot;
+  const diag = $('diag');
+  if (snap) {
+    const rows = (snap.controls || [])
+      .map((c) => `  ${c.tag} "${c.txt || ''}"${c.aria ? ' aria="' + c.aria + '"' : ''}${c.dis ? ' [disabled]' : ''}`)
+      .join('
+');
+    diag.textContent =
+      `picker found: ${snap.marker}
+text: ${(snap.text || '').slice(0, 120)}
+controls:
+${rows}`;
+    diag.hidden = false;
+  } else {
+    diag.hidden = true;
+  }
 
   $('log').textContent = (st.log || [])
     .slice(-8)

@@ -60,7 +60,7 @@ async function runProbe(st, polls) {
 
   if (result.state === 'unavailable') {
     // The expected answer, most of the time. Reset the streak and go again.
-    await set({ unknownStreak: 0, lastResult: 'no seats', lastResultAt: Date.now() });
+    await set({ unknownStreak: 0, lastResult: 'no seats', lastResultAt: Date.now(), lastSnapshot: null });
     await scheduleNext();
     return;
   }
@@ -106,7 +106,14 @@ async function runProbe(st, polls) {
   // know. A few in a row is a broken selector, not bad luck, and the watchdog
   // will not catch it because the loop is running fine.
   const streak = (Number(st.unknownStreak) || 0) + 1;
-  await set({ unknownStreak: streak, lastResult: 'unclear: ' + result.detail, lastResultAt: Date.now() });
+  await set({
+    unknownStreak: streak,
+    lastResult: 'unclear: ' + result.detail,
+    lastResultAt: Date.now(),
+    // What the page actually looked like. Without this, diagnosing a blind
+    // probe means guessing at selectors a second time.
+    lastSnapshot: result.snapshot || null,
+  });
 
   if (streak >= MAX_UNKNOWN_STREAK) {
     await stop('the probe could not read the page ' + streak + ' times running');
