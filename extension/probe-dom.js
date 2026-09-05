@@ -453,27 +453,42 @@ var ROCProbeDom = (function () {
       clicked.push('quantity + (' + hit.how + ')');
       log('set quantity to 1');
 
-      // Wait for React to re-render, and check the click actually landed. The
-      // previous version slept 400ms and assumed. When it was clicking a
-      // wrapper div rather than the button, the quantity never moved and the
-      // only symptom was a confusing "the search button never became
-      // available" several steps later.
+      // Wait for the click to take effect, and judge it by the SEARCH BUTTON,
+      // not by the quantity text.
+      //
+      // A live dump caught the exact reason: after a successful click the
+      // add-to-cart button had already flipped from disabled/"No Tickets
+      // Selected" to enabled/"Find Best Available" while [data-testid^=qtyText]
+      // still read "0". Gating on the readout therefore declared failure one
+      // step before running a search that was ready to go.
+      //
+      // The search button going live is the thing we actually need, it is the
+      // thing the next step consumes, and it is unambiguous. The readout is
+      // kept only as a secondary signal and for the diagnostic message.
       const settleBy = Date.now() + (opts.settleMs || 4000);
       while (Date.now() < settleBy) {
         await sleep(120);
+        if (enabledSearch()) break;
         const now = readQuantity();
-        if (before === null ? enabledSearch() : now !== null && now > before) break;
+        if (before !== null && now !== null && now > before) break;
       }
 
-      const after = readQuantity();
-      if (before !== null && after !== null && after <= before) {
+      if (!enabledSearch()) {
+        const after = readQuantity();
+        const moved = before !== null && after !== null && after > before;
         return {
           state: 'unknown',
-          detail: 'clicked the quantity control (' + hit.how + ') but the quantity stayed at ' + after,
+          detail:
+            'clicked the quantity control (' + hit.how + ') but the search button did not ' +
+            'become available' +
+            (moved
+              ? ' even though the quantity moved to ' + after
+              : ' and the quantity stayed at ' + (after === null ? 'unknown' : after)),
           clicked,
           snapshot: snapshot(),
         };
       }
+
     }
 
     // 2. The search button, now that quantity should be 1. Prefer the test id;

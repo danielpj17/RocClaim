@@ -347,7 +347,9 @@ function livePage(opts = {}) {
         // Only a click on the BUTTON counts, exactly like React. A click that
         // lands on the wrapper div must do nothing, which is what makes the
         // regression test meaningful.
-        document.querySelector('[data-testid=qtyText-0]').textContent = '1';
+        if (!${opts.staleQtyText ? 'true' : 'false'}) {
+          document.querySelector('[data-testid=qtyText-0]').textContent = '1';
+        }
         var p = document.getElementById('primary');
         p.disabled = false; p.textContent = 'Find Best Available';
       });
@@ -377,6 +379,17 @@ test('LIVE DOM: clicks the button itself, not the wrapper div around it', async 
   assert.ok(clicks.includes('qtyButtonPlus-0'), 'must click the button: ' + JSON.stringify(clicks));
 });
 
+test('LIVE DOM: a stale quantity readout does not abort a working cycle', async () => {
+  // Observed live: after a successful click the add-to-cart button had already
+  // flipped to enabled/"Find Best Available" while [data-testid^=qtyText] still
+  // read "0". Gating on the readout declared failure one step before running a
+  // search that was ready to go. The search button is the real signal.
+  const { result, clicks } = await probe(livePage({ staleQtyText: true }));
+  assert.equal(result.state, 'unavailable', JSON.stringify(result).slice(0, 300));
+  assert.ok(clicks.includes('qtyButtonPlus-0'), JSON.stringify(clicks));
+  assert.ok(clicks.includes('primary'), 'the search must actually run: ' + JSON.stringify(clicks));
+});
+
 test('LIVE DOM: a click that does not move the quantity is reported as such', async () => {
   // Rather than as a confusing complaint about the search button.
   const html = livePage().replace(
@@ -385,6 +398,7 @@ test('LIVE DOM: a click that does not move the quantity is reported as such', as
   );
   const { result } = await probe(html, { readyMs: 4000 });
   assert.equal(result.state, 'unknown');
+  assert.match(result.detail, /search button did not become available/);
   assert.match(result.detail, /quantity stayed at 0/);
 });
 
