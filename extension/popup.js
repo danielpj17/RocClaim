@@ -49,8 +49,7 @@ async function render() {
   if (snap) {
     const rows = (snap.controls || [])
       .map((c) => `  ${c.tag} "${c.txt || ''}"${c.aria ? ' aria="' + c.aria + '"' : ''}${c.dis ? ' [disabled]' : ''}`)
-      .join('
-');
+      .join('\n');
     diag.textContent =
       `picker found: ${snap.marker}
 text: ${(snap.text || '').slice(0, 120)}
