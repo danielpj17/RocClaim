@@ -249,11 +249,101 @@ URL, so nothing keeps running there.
 Event URLs are `/students/event/<seasonCd>/<itemCd>` — `F26/E01` for the
 football game, `WVB26/E03` for this volleyball one.
 
-**What this HAR does NOT contain:** the seat-search request itself. The capture
-starts on the cart page — no document loads, and only three `/pac-api/` calls,
-all cart/account/authz. To build the API detector we still need a capture made
-**on the event page, with Preserve log ticked before clicking Find Best
-Available**. Until then the DOM probe (section 0.6) is the detector.
+**This HAR does not contain the seat-search request** — it starts on the cart
+page. That gap is closed by section 0.8.
+
+---
+
+## 0.8. THE API, fully captured (2026-09-04) — `recon/claim-success.har`
+
+A HAR of a complete successful claim, taken with Preserve log on, so it holds
+the whole flow: event page → seat search → cart → checkout. 203 entries.
+Git-ignored; it carries a live session.
+
+**Everything below is read off that capture. None of it is inferred.**
+
+### The seat search IS the add-to-cart
+
+There is no read-only availability endpoint. `discovery_eventDetailMPT` returns
+price levels and quantity limits but no seat count, and
+`discovery_reservedSeating` returns a seating-mode flag. **The only way to learn
+whether a seat exists is to attempt to reserve one** — which is exactly what the
+DOM probe does by clicking, and what an API detector would do directly.
+
+```
+POST https://byutickets.evenue.net/pac-api/consumer/gql
+content-type: application/json
+pac-authz: <uuid, see below>
+pac-context-data: {"distributorId":"BYU","dataAccountId":"789","siteId":"ev_byu","isStudentFlow":true,"dbId":"BYU"}
+
+{"query":"mutation Mutation($cartAddCart: AddCartRequest!) {  cart_addCart(addCart: $cartAddCart) {    cartId ,  hash   }}",
+ "variables":{"cartAddCart":{"seatSearchCriteria":{
+    "seasonCode":"WS26","itemCode":"E05","quantity":1,
+    "pls":["4"],"pts":["ROC:1"],
+    "priceFrom":0,"priceTo":0,"multipleRowSearch":"false"}}}}
+```
+
+Success returns `{"data":{"cart_addCart":{"cartId":"789_...","hash":"..."}}}`
+and the seat is held for ten minutes (section 0.7). The no-seats shape was not
+captured — this HAR is a success — so a detector must treat "a cartId came back"
+as available and everything else as unavailable, keeping a network or HTTP
+failure distinct as *unknown*.
+
+### Where every parameter comes from
+
+| Field | Source |
+| --- | --- |
+| `seasonCode`, `itemCode` | the armed URL: `/students/event/<season>/<item>` |
+| `pls`, `pts` | `discovery_eventDetailMPT` → `PL_PT_PRICES[].PL` and `PT + ':' + PT_SEQUENCE` |
+| `pac-authz` | **the event page's own HTML**: `"pacAuthz":"<uuid>"`, one occurrence |
+| `pac-context-data` | static for this site, the literal above |
+
+```
+query { discovery_eventDetailMPT(seasonCd:"WS26", itemCd:"E05") {
+  SEASONCD ITEMCD PL_PT_PRICES { PL PL_DESC PT PT_DESC PT_SEQUENCE
+    PRICE FACILITY_FEE PER_TICKET_FEE PLPT_MINQTY PLPT_MAXQTY ... } } }
+
+→ PL_PT_PRICES: [{ PL:"4", PL_DESC:"ROC", PT:"ROC", PT_DESC:"ROC",
+     PT_SEQUENCE:1, PRICE:0, FACILITY_FEE:0, PER_TICKET_FEE:0,
+     PLPT_MINQTY:1, PLPT_MAXQTY:1, PLPT_STUDENTMAXQTY:1 }]
+```
+
+**This is a better free-ticket gate than scraping "$0.00" off the page.**
+`PRICE`, `FACILITY_FEE` and `PER_TICKET_FEE` are numbers from the server,
+checkable before anything is attempted. The rule from section 5 still stands —
+absence of a price is not evidence of free — but here we get an affirmative
+zero rather than a rendered string.
+
+That `pac-authz` sits in the page HTML is what makes an API detector practical
+at all: a content script can read it with a regex over the document, with no
+main-world injection and no reconstructing the app's internal state. It was one
+stable value across all 203 entries, so it is per-session, not per-request.
+
+### The claim itself, for when auto-claim is on the table
+
+```
+mutation Checkout_cart($checkoutCart: CheckoutCartRequest!) {
+  checkout_cart(checkoutCart: $checkoutCart) { orderId ticketInsurance { ... } } }
+
+variables.checkoutCart = { cartType:"T", cartId, email, phone,
+                           clientTimezoneDiff, fpPayload: <device fingerprint blob> }
+→ {"data":{"checkout_cart":{"orderId":"...","ticketInsurance":null}}}
+```
+
+`delete_cart(cartId)` exists and releases a held cart — worth knowing, since it
+means a probe *could* undo a reservation it did not want. **Do not wire checkout
+up without Daniel saying so.** Section 0.7 established that the ten-minute hold
+makes notify-only genuinely useful, so auto-claim stays a convenience.
+
+### What this does not change
+
+The DOM probe (section 0.6) works and is tested; an API detector is an upgrade,
+not a rescue. If you build it, keep it behind the same `strategy` switch, keep
+the free-ticket gate, and keep the rule that a found seat stops the watch and
+hands the page over untouched.
+
+**Still open:** the `cart_addCart` failure shape, which needs a capture of a
+search that finds nothing.
 
 ---
 
