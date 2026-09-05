@@ -75,6 +75,11 @@ var ROCProbeDom = (function () {
     nothingSelected: /no tickets selected/i,
     // The answer we are polling for.
     seatsNotFound: /seats not found|no seats that matched/i,
+    // Positive evidence of a successful search. From the HAR of a real claim:
+    // success navigates to byutickets.evenue.net/cart and the page title is
+    // "Review Order". These are things only a found seat produces.
+    cartEvidence: /review order|your cart|added to cart|cart expires|proceed to checkout|best available found/i,
+    cartUrl: /\/cart(\b|\/|\?|$)/i,
     modalDismiss: /^(ok|okay|close)$/i,
   };
 
@@ -331,19 +336,43 @@ var ROCProbeDom = (function () {
   }
 
   // ---- outcome classification (pure, so it is testable) --------------------
-  // After the search, exactly one of these is true. "Nothing changed" is
-  // deliberately NOT treated as unavailable -- if the click did nothing we do
-  // not know the answer, and pretending we do is how a broken selector turns
-  // into thirty silent hours.
-  function classifyOutcome({ text, urlChanged, fingerprintChanged }) {
+  //
+  // After the search, exactly one of these is true. Two rules, both learned the
+  // hard way:
+  //
+  // "Nothing changed" is unknown, never unavailable. If the click did nothing
+  // we do not know the answer, and pretending we do is how a broken selector
+  // turns into thirty silent hours.
+  //
+  // "Something changed" is NOT available. That mistake pushed a live
+  // "SEAT FOUND -- GO NOW" at 11pm when there were no seats: the search button
+  // repaints into a loading state a fraction of a second before the "Seats Not
+  // Found" modal renders, and a bare fingerprint diff fires on the spinner. A
+  // false positive is worse than a miss here -- it wakes you for nothing AND
+  // stops the watch, so you lose the coverage too.
+  //
+  // Availability now needs positive evidence: the navigation to /cart that a
+  // real claim produces, or cart wording on the page. A settled, unexplained
+  // change is reported only after the page has stopped moving, and only once
+  // the modal has definitively not appeared.
+  function classifyOutcome({ text, url, urlChanged, fingerprintChanged, settled }) {
     if (SELECTORS.seatsNotFound.test(text || '')) {
       return { state: 'unavailable', detail: 'the site reported no seats' };
+    }
+    if (url && SELECTORS.cartUrl.test(url)) {
+      return { state: 'available', detail: 'the seat search reached the cart' };
     }
     if (urlChanged) {
       return { state: 'available', detail: 'the seat search navigated somewhere new' };
     }
-    if (fingerprintChanged) {
-      return { state: 'available', detail: 'the page changed and it was not the no-seats modal' };
+    if (SELECTORS.cartEvidence.test(text || '')) {
+      return { state: 'available', detail: 'the page shows a cart or an order to review' };
+    }
+    if (settled && fingerprintChanged) {
+      return {
+        state: 'available',
+        detail: 'the page changed, settled, and never showed the no-seats modal',
+      };
     }
     return { state: 'unknown', detail: 'the seat search produced no visible response' };
   }
@@ -554,13 +583,25 @@ var ROCProbeDom = (function () {
     // 4. Wait for the answer.
     const deadline = Date.now() + waitMs;
     let outcome = null;
+    let lastFp = beforeFp;
+    let stableSince = Date.now();
+
     while (Date.now() < deadline) {
       await sleep(150);
       const text = bodyText();
+      const fp = fingerprint(text);
+      if (fp !== lastFp) {
+        lastFp = fp;
+        stableSince = Date.now();   // still moving; a spinner is not an answer
+      }
       outcome = classifyOutcome({
         text,
+        url: location.href,
         urlChanged: location.href !== beforeUrl,
-        fingerprintChanged: fingerprint(text) !== beforeFp,
+        fingerprintChanged: fp !== beforeFp,
+        // Only trust an unexplained change once the page has held still. This
+        // is what stops a loading spinner reading as a found seat.
+        settled: Date.now() - stableSince > 1200,
       });
       if (outcome.state !== 'unknown') break;
     }

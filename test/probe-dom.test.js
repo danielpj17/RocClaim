@@ -46,14 +46,58 @@ test('the no-seats modal is the only thing that means unavailable', () => {
   );
 });
 
-test('a change that is not the modal means something was found', () => {
+test('a repaint is NOT a found seat -- the false positive that woke him at 11pm', () => {
+  // The live failure: a "SEAT FOUND -- GO NOW" push while there were no seats.
+  // The search button repaints into a loading state a fraction of a second
+  // before the "Seats Not Found" modal renders, and a bare fingerprint diff
+  // fires on that spinner. A false positive is worse than a miss -- it wakes
+  // him for nothing AND stops the watch, so the coverage is lost too.
   assert.equal(
-    P.classifyOutcome({ text: 'Your seat: ROC-GA Row 12', urlChanged: false, fingerprintChanged: true }).state,
+    P.classifyOutcome({
+      text: 'Select Your Tickets Searching...',
+      urlChanged: false,
+      fingerprintChanged: true,
+      settled: false,
+    }).state,
+    'unknown'
+  );
+});
+
+test('reaching the cart is a found seat', () => {
+  // The definitive signal, from the HAR of a real claim: success navigates to
+  // byutickets.evenue.net/cart and the page reads "Review Order".
+  assert.equal(
+    P.classifyOutcome({ text: 'anything', url: 'https://byutickets.evenue.net/cart' }).state,
+    'available'
+  );
+  assert.equal(
+    P.classifyOutcome({ text: 'Review Order', urlChanged: false, fingerprintChanged: false }).state,
     'available'
   );
   assert.equal(
     P.classifyOutcome({ text: 'anything', urlChanged: true, fingerprintChanged: false }).state,
     'available'
+  );
+});
+
+test('an unexplained change counts only once the page has settled', () => {
+  // Kept so an inline success that never navigates is still caught -- but only
+  // after the page has stopped moving and the modal has definitively not come.
+  const args = { text: 'Your seat: ROC-GA Row 12', urlChanged: false, fingerprintChanged: true };
+  assert.equal(P.classifyOutcome(Object.assign({}, args, { settled: false })).state, 'unknown');
+  assert.equal(P.classifyOutcome(Object.assign({}, args, { settled: true })).state, 'available');
+});
+
+test('the no-seats modal always wins, however much else changed', () => {
+  assert.equal(
+    P.classifyOutcome({
+      text: 'Seats Not Found There were no seats that matched your preferences.',
+      url: 'https://byutickets.evenue.net/cart',
+      urlChanged: true,
+      fingerprintChanged: true,
+      settled: true,
+    }).state,
+    'unavailable'
   );
 });
 
