@@ -269,6 +269,97 @@ test('no source file carries stray control characters', () => {
   }
 });
 
+// A replica of the LIVE DOM, taken from a diagnostic dump of
+// /students/event/WS26/E05 on 2026-09-04. The thing that matters: the quantity
+// stepper is not a <button>, not an <a>, and carries no role=button -- it never
+// appeared in the candidate list at all, which is why four rounds of label
+// matching could not find it. The primary button carries
+// data-testid="add-to-cart-btn" and is disabled until a quantity is chosen.
+function livePage(opts = {}) {
+  const found = opts.seatsAvailable ? 'true' : 'false';
+  return `<!doctype html><html><body style="margin:0">
+  <button type="button" aria-label="Open the menu" id="hamburger-button" data-test-id="navigationMenu">menu</button>
+  <a href="https://tickets.byu.edu/" aria-label="Go to Main Page" target="_blank">Go to Main Page</a>
+  <div style="padding:20px">
+    <div>Women's Soccer</div>
+    <div>Women's Soccer vs Oklahoma</div>
+    <div>Sat, Sep 5, 2026 2:00pm South Field
+      <button type="button" style="background:none;border:none">More Info</button>
+    </div>
+    <button type="button" data-testid="more-info-modal" tabindex="0" aria-label="readMoreInfo">More Info</button>
+    <h2>Select Your Tickets</h2>
+    <h3>Zones*</h3>
+    <p>Any fees and contributions are included in the price.</p>
+    <p>ROC</p>
+    <h3>Quantity</h3>
+    <p>Must be a minimum of 1, up to 1</p>
+    <div style="display:flex;align-items:center;gap:14px;padding:16px;border:1px solid #ddd">
+      <span style="flex:1">ROC</span>
+      <div id="minus" style="width:32px;height:32px;border-radius:50%;background:#eee"><svg width="12" height="12"></svg></div>
+      <span id="qty" style="width:20px;text-align:center">0</span>
+      <div id="plus" style="width:32px;height:32px;border-radius:50%;background:#002E5D"><svg width="12" height="12"></svg></div>
+    </div>
+    <div>$0.00</div>
+    <button data-testid="add-to-cart-btn" disabled tabindex="0" id="primary">No Tickets Selected</button>
+  </div>
+  <a href="/myaccount/sitesecurity">Site Security</a>
+  <a href="https://tickets.byu.edu/privacy-and-refund-policy" target="_blank">Privacy Policy</a>
+  <a tabindex="0" role="link" href="#">Do Not Share or Sell My Information</a>
+  <div id="modal" style="display:none"><h2>Seats Not Found</h2>
+    <p>There were no seats that matched your preferences.</p><button id="ok">OK</button></div>
+  <script>
+    window.__clicks = [];
+    document.addEventListener('click', (e) => {
+      const el = e.target.closest('button, a, [role=button], input, #plus, #minus');
+      if (el) window.__clicks.push(el.id || (el.innerText || '').replace(/\\s+/g,' ').trim());
+    }, true);
+    document.getElementById('plus').addEventListener('click', () => {
+      document.getElementById('qty').textContent = '1';
+      const p = document.getElementById('primary');
+      p.disabled = false; p.textContent = 'Find Best Available';
+    });
+    document.getElementById('primary').addEventListener('click', () => {
+      if (${found}) { document.querySelector('h2').textContent = 'Best Available Found'; return; }
+      document.getElementById('modal').style.display = 'block';
+    });
+    document.getElementById('ok').addEventListener('click', () => {
+      document.getElementById('modal').style.display = 'none';
+    });
+    document.querySelector('[data-testid=more-info-modal]').addEventListener('click', () => {
+      document.body.insertAdjacentHTML('beforeend', '<div id="infomodal">Season tickets go on sale...</div>');
+    });
+  <\/script></body></html>`;
+}
+
+test('LIVE DOM: the div stepper is found and the search runs', async () => {
+  const { result, clicks } = await probe(livePage());
+  assert.equal(result.state, 'unavailable', JSON.stringify(result).slice(0, 400));
+  assert.ok(clicks.includes('plus'), 'must click the div stepper: ' + JSON.stringify(clicks));
+  // The recorder logs element ids, and the search button's id is 'primary'.
+  assert.ok(clicks.includes('primary'), 'must run the search: ' + JSON.stringify(clicks));
+});
+
+test('LIVE DOM: neither More Info nor the hamburger is ever clicked', async () => {
+  const { clicks } = await probe(livePage());
+  assert.ok(!clicks.includes('More Info'), JSON.stringify(clicks));
+  assert.ok(!clicks.includes('hamburger-button'), JSON.stringify(clicks));
+  assert.equal(await 0, 0);
+});
+
+test('LIVE DOM: a found seat stops without touching anything else', async () => {
+  const { result, clicks } = await probe(livePage({ seatsAvailable: true }));
+  assert.equal(result.state, 'available');
+  assert.ok(!clicks.includes('Site Security'));
+  assert.ok(!clicks.includes('Do Not Share or Sell My Information'));
+});
+
+test('LIVE DOM: the minus control is never the one chosen', async () => {
+  // It is the same shape and the same size as the plus, on the same line. Only
+  // its position distinguishes them, so this is the test that pins the rule.
+  const { clicks } = await probe(livePage());
+  assert.ok(!clicks.includes('minus'), 'clicked the decrement: ' + JSON.stringify(clicks));
+});
+
 test('a nameless icon stepper is found by shape', async () => {
   // The live page's + is an icon button with no text and no aria-label, so no
   // label matcher can ever see it. Found structurally instead: a container with

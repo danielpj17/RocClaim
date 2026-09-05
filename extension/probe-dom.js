@@ -43,8 +43,14 @@ var ROCProbeDom = (function () {
       title: /^(increase|increment|plus|add\s+(one|1|ticket|item))(\s|$)/i,
       cls: /(^|[-_ ])(plus|increment|increase|stepper-up|qty-up)([-_ ]|$)/i,
     },
-    // The primary button, in its two states.
+    // The primary button, in its two states. The test id is from the live page
+    // and is far more stable than the label, which changes between "No Tickets
+    // Selected" and "Find Best Available" depending on the quantity.
+    searchTestId: '[data-testid="add-to-cart-btn"]',
     searchButton: /find best available/i,
+    // Also from the live page. The probe clicked this for a while, believing it
+    // was the stepper; naming it makes that impossible by construction.
+    neverClick: '[data-testid="more-info-modal"], #hamburger-button',
     nothingSelected: /no tickets selected/i,
     // The answer we are polling for.
     seatsNotFound: /seats not found|no seats that matched/i,
@@ -86,6 +92,17 @@ var ROCProbeDom = (function () {
       url: location.href,
       marker: SELECTORS.pageMarker.test(document.body ? document.body.innerText : ''),
       text: (document.body ? document.body.innerText : '').replace(/\s+/g, ' ').slice(0, 200),
+      // The markup around the quantity readout. The stepper turned out not to be
+      // a button at all, so a list of buttons could never have shown it -- this
+      // makes the next unreadable page diagnose itself.
+      quantityRow: (function () {
+        const label = Array.from(document.querySelectorAll('div, span, p, h1, h2, h3, h4'))
+          .find((e) => !e.children.length && /^quantity$/i.test((e.textContent || '').trim()));
+        if (!label) return null;
+        let c = label;
+        for (let i = 0; i < 4 && c.parentElement; i++) c = c.parentElement;
+        return (c.outerHTML || '').replace(/\s+/g, ' ').slice(0, 1200);
+      })(),
       controls: els.map((el) => ({
         tag: el.tagName,
         txt: labelOf(el).slice(0, 30),
@@ -134,26 +151,52 @@ var ROCProbeDom = (function () {
   const GLYPHY = /^.{0,2}$/;
 
   function findIncrementStructurally() {
-    const rows = [];
-    const containers = document.querySelectorAll('div, span, li, td, section, p');
-    for (const el of containers) {
-      for (const n of el.childNodes) {
-        if (n.nodeType === 3 && /^\s*\d{1,3}\s*$/.test(n.nodeValue || '')) {
-          rows.push(el);
-          break;
+    // The live DOM dump settled this: the quantity stepper is not a <button>,
+    // not an <a>, and has no role=button -- it never appeared in the candidate
+    // list at all. So it is found geometrically instead of by tag or name.
+    //
+    // A stepper looks like exactly one thing on every site that has ever had
+    // one: a bare number with a small square control on each side of it, all on
+    // the same line. Find the number, then take the nearest small control to
+    // its RIGHT.
+    const qty = [];
+    const all = document.querySelectorAll('div, span, p, li, td, strong, b');
+    for (const el of all) {
+      if (el.children.length) continue;
+      if (!/^\s*\d{1,3}\s*$/.test(el.textContent || '')) continue;
+      const r = el.getBoundingClientRect();
+      if (r.width > 0 && r.height > 0) qty.push({ el, r });
+    }
+
+    for (const { r: qr } of qty) {
+      const midY = qr.top + qr.height / 2;
+      let best = null;
+
+      for (const el of document.querySelectorAll('*')) {
+        const r = el.getBoundingClientRect();
+        // Small and roughly square: an icon control, not a panel or a wide
+        // worded button.
+        if (r.width < 16 || r.width > 72 || r.height < 16 || r.height > 72) continue;
+        if (Math.abs(r.width - r.height) > 24) continue;
+        // On the same line as the number, and to the right of it.
+        if (Math.abs(r.top + r.height / 2 - midY) > 18) continue;
+        if (r.left < qr.right) continue;
+        if (r.left - qr.right > 140) continue;
+        // Never a worded control. An icon has no text; this is the fence that
+        // keeps "Checkout" or "More Info" out of a structural guess.
+        const label = labelOf(el);
+        if (label && !GLYPHY.test(label)) continue;
+        if (label && NEVER.test(label)) continue;
+        if (el.closest && SELECTORS.neverClick && el.closest(SELECTORS.neverClick)) continue;
+        if (!usable(el)) continue;
+
+        // Prefer the outermost element of a nested icon (a div wrapping an svg
+        // wrapping a path): the click handler lives on the outer one.
+        if (!best || r.left < best.r.left || (r.left === best.r.left && r.width > best.r.width)) {
+          best = { el, r };
         }
       }
-    }
-    for (const row of rows) {
-      for (let c = row, depth = 0; c && depth < 4; c = c.parentElement, depth++) {
-        const btns = Array.from(c.querySelectorAll('button, [role="button"]')).filter(usable);
-        if (btns.length < 2) continue;
-        const candidate = btns[btns.length - 1];
-        const label = labelOf(candidate);
-        if (label && !GLYPHY.test(label)) continue;   // worded control: not a stepper
-        if (label && NEVER.test(label)) continue;
-        return candidate;
-      }
+      if (best) return best.el;
     }
     return null;
   }
@@ -302,8 +345,15 @@ var ROCProbeDom = (function () {
       await sleep(settleMs);
     }
 
-    // 2. The search button, now that quantity should be 1.
-    const search = findControl(SELECTORS.searchButton);
+    // 2. The search button, now that quantity should be 1. Prefer the test id;
+    // fall back to the label. Either way it must be enabled -- the same element
+    // reads "No Tickets Selected" and is disabled until a quantity is chosen.
+    let search = null;
+    const byTestId = document.querySelector(SELECTORS.searchTestId);
+    if (byTestId && usable(byTestId) && !SELECTORS.nothingSelected.test(labelOf(byTestId))) {
+      search = byTestId;
+    }
+    if (!search) search = findControl(SELECTORS.searchButton);
     if (!search) {
       return {
         state: 'unknown',
@@ -343,7 +393,7 @@ var ROCProbeDom = (function () {
       };
     }
     const label = labelOf(search);
-    if (!isAllowedControl(label)) {
+    if (search !== byTestId && !isAllowedControl(label)) {
       return { state: 'refused', detail: 'the search button no longer matches the allowlist: "' + label + '"', clicked };
     }
 
