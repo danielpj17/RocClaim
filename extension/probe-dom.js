@@ -63,6 +63,15 @@ var ROCProbeDom = (function () {
     // find. Two rounds of selector fixes were chasing a stepper that genuinely
     // was not in the DOM yet.
     quantityPanel: '[data-testid="QtyPanelNewLayout"]',
+    // Exact, from a full dump of the rendered panel. These end the guessing:
+    // the stepper IS a <button>, it was simply never in the DOM at the moment
+    // the earlier snapshots were taken.
+    //   <button id="qtyButtonPlus-0" data-testid="qtyButtonPlus-0">
+    //     <div><img alt="Add ROC" src=".../PlusBiggerSign.svg"></div>
+    //   </button>
+    incrementTestId: '[data-testid^="qtyButtonPlus"], [id^="qtyButtonPlus"]',
+    decrementTestId: '[data-testid^="qtyButtonSub"], [id^="qtyButtonSub"]',
+    quantityText: '[data-testid^="qtyText"]',
     nothingSelected: /no tickets selected/i,
     // The answer we are polling for.
     seatsNotFound: /seats not found|no seats that matched/i,
@@ -176,6 +185,29 @@ var ROCProbeDom = (function () {
   // it must clear the refusal list. A worded control can never be chosen here.
   const GLYPHY = /^.{0,2}$/;
 
+  // The rendered quantity, so a click can be checked rather than assumed.
+  function readQuantity() {
+    const el = document.querySelector(SELECTORS.quantityText);
+    if (!el) return null;
+    const m = (el.textContent || '').match(/\d{1,3}/);
+    return m ? Number(m[0]) : null;
+  }
+
+  function findIncrement() {
+    // Exact first. Everything below is fallback for a page that has been
+    // restyled out from under these ids.
+    const exact = document.querySelector(SELECTORS.incrementTestId);
+    if (exact && usable(exact)) return { el: exact, how: 'testid' };
+
+    const named = findControl(SELECTORS.increment);
+    if (named) return { el: named, how: 'label' };
+
+    const shaped = findIncrementStructurally();
+    if (shaped) return { el: shaped, how: 'shape' };
+
+    return null;
+  }
+
   function findIncrementStructurally() {
     // The stepper is not a <button>, not an <a>, and has no role=button -- it
     // never appears in CONTROL_SELECTOR at all, so it cannot be found by tag or
@@ -211,16 +243,31 @@ var ROCProbeDom = (function () {
       if (el.closest && SELECTORS.neverClick && el.closest(SELECTORS.neverClick)) continue;
       if (!usable(el)) continue;
       if (readout && el === readout.el) continue;
+      if (el.closest && el.closest(SELECTORS.decrementTestId)) continue;
       candidates.push({ el, r });
     }
     if (!candidates.length) return null;
 
-    // Prefer an outer wrapper over the icon nested inside it: the click handler
-    // sits on the outer element, and clicking an inner <path> can miss it.
-    const outermost = candidates.filter(
-      (c) => !candidates.some((o) => o.el !== c.el && o.el.contains(c.el))
+    // Prefer a real control -- <button>, role=button, anything focusable -- over
+    // the plain <div> that wraps it. This was backwards before: taking the
+    // OUTERMOST element picked the styled-component wrapper around the stepper,
+    // and clicking a div that contains a button does not activate the button.
+    // The quantity never moved and the search button never enabled.
+    const clickable = candidates.filter(
+      (c) =>
+        c.el.tagName === 'BUTTON' ||
+        c.el.getAttribute('role') === 'button' ||
+        c.el.hasAttribute('tabindex')
     );
-    const pool = outermost.length ? outermost : candidates;
+    let pool = clickable;
+    if (!pool.length) {
+      // No real control among them: fall back to the outermost, which at least
+      // beats clicking a bare <img> or <path>.
+      pool = candidates.filter(
+        (c) => !candidates.some((o) => o.el !== c.el && o.el.contains(c.el))
+      );
+    }
+    if (!pool.length) pool = candidates;
 
     if (readout) {
       // On the same line, to the right of the number: that is the increment.
@@ -379,12 +426,9 @@ var ROCProbeDom = (function () {
     // This is gated only by the allowlist, not by the price: setting a quantity
     // commits nothing. The search click below is where the money check bites.
     if (!findControl(SELECTORS.searchButton)) {
-      let plus = findControl(SELECTORS.increment);
-      let byShape = false;
-      if (!plus) {
-        plus = findIncrementStructurally();
-        byShape = !!plus;
-      }
+      const hit = findIncrement();
+      const plus = hit && hit.el;
+      const byShape = !!hit && hit.how === 'shape';
       if (!plus) {
         return {
           state: 'unknown',
@@ -404,21 +448,44 @@ var ROCProbeDom = (function () {
           snapshot: snapshot(),
         };
       }
+      const before = readQuantity();
       plus.click();
-      clicked.push(byShape ? 'quantity + (by shape)' : 'quantity +');
+      clicked.push('quantity + (' + hit.how + ')');
       log('set quantity to 1');
-      await sleep(settleMs);
+
+      // Wait for React to re-render, and check the click actually landed. The
+      // previous version slept 400ms and assumed. When it was clicking a
+      // wrapper div rather than the button, the quantity never moved and the
+      // only symptom was a confusing "the search button never became
+      // available" several steps later.
+      const settleBy = Date.now() + (opts.settleMs || 4000);
+      while (Date.now() < settleBy) {
+        await sleep(120);
+        const now = readQuantity();
+        if (before === null ? enabledSearch() : now !== null && now > before) break;
+      }
+
+      const after = readQuantity();
+      if (before !== null && after !== null && after <= before) {
+        return {
+          state: 'unknown',
+          detail: 'clicked the quantity control (' + hit.how + ') but the quantity stayed at ' + after,
+          clicked,
+          snapshot: snapshot(),
+        };
+      }
     }
 
     // 2. The search button, now that quantity should be 1. Prefer the test id;
     // fall back to the label. Either way it must be enabled -- the same element
     // reads "No Tickets Selected" and is disabled until a quantity is chosen.
-    let search = null;
-    const byTestId = document.querySelector(SELECTORS.searchTestId);
-    if (byTestId && usable(byTestId) && !SELECTORS.nothingSelected.test(labelOf(byTestId))) {
-      search = byTestId;
+    let search = enabledSearch();
+    const searchBy = Date.now() + 4000;
+    while (!search && Date.now() < searchBy) {
+      await sleep(120);
+      search = enabledSearch();
     }
-    if (!search) search = findControl(SELECTORS.searchButton);
+    const byTestId = document.querySelector(SELECTORS.searchTestId);
     if (!search) {
       return {
         state: 'unknown',

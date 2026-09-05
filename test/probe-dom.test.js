@@ -308,7 +308,7 @@ function livePage(opts = {}) {
   <script>
     window.__clicks = [];
     document.addEventListener('click', (e) => {
-      const el = e.target.closest('button, a, [role=button], input, #plus, #minus');
+      const el = e.target.closest('button, a, [role=button], input');
       if (el) window.__clicks.push(el.id || (el.innerText || '').replace(/\\s+/g,' ').trim());
     }, true);
     document.getElementById('primary').addEventListener('click', () => {
@@ -323,17 +323,31 @@ function livePage(opts = {}) {
     // heading above it was already painted.
     setTimeout(function () {
       document.getElementById('qtypanel').innerHTML =
-        '<div style="display:flex;align-items:center;gap:14px;padding:16px">' +
-        '<span style="flex:1">ROC</span>' +
-        '<div id="minus" style="width:32px;height:32px;border-radius:50%;background:#eee"></div>' +
-        (${opts.inputQty ? 'true' : 'false'}
-          ? '<input id="qty" value="0" readonly style="width:24px;text-align:center;border:none">'
-          : '<span id="qty" style="width:20px;text-align:center">0</span>') +
-        '<div id="plus" style="width:32px;height:32px;border-radius:50%;background:#002E5D"></div>' +
+        // Copied from the live dump. The wrapper <div> around each button is
+        // the load-bearing detail: taking the outermost small square element
+        // picked the wrapper, and clicking it never reached the button.
+        '<div style="display:flex;align-items:center;gap:12px;padding:16px">' +
+        '<div data-testid="ptText-0" style="flex:1">ROC</div>' +
+        '<div style="display:flex">' +
+          '<button id="qtyButtonSub-0" data-testid="qtyButtonSub-0" disabled tabindex="0" ' +
+            'style="width:40px;height:40px;border-radius:50%">' +
+            '<div><img alt="Remove ROC" width="16" height="16"></div></button>' +
+        '</div>' +
+        '<div style="display:flex"><div>' +
+          '<div data-testid="qtyText-0" aria-live="polite" style="width:20px;text-align:center">0</div>' +
+        '</div></div>' +
+        '<div>' +
+          '<button id="qtyButtonPlus-0" data-testid="qtyButtonPlus-0" tabindex="0" ' +
+            'style="width:40px;height:40px;border-radius:50%;background:#002E5D">' +
+            '<div><img alt="Add ROC" width="16" height="16"></div></button>' +
+        '</div>' +
+        '<button data-testid="baarLink" style="width:16px;height:16px"></button>' +
         '</div>';
-      document.getElementById('plus').addEventListener('click', function () {
-        var q = document.getElementById('qty');
-        if (q.tagName === 'INPUT') q.value = '1'; else q.textContent = '1';
+      document.getElementById('qtyButtonPlus-0').addEventListener('click', function () {
+        // Only a click on the BUTTON counts, exactly like React. A click that
+        // lands on the wrapper div must do nothing, which is what makes the
+        // regression test meaningful.
+        document.querySelector('[data-testid=qtyText-0]').textContent = '1';
         var p = document.getElementById('primary');
         p.disabled = false; p.textContent = 'Find Best Available';
       });
@@ -344,12 +358,46 @@ function livePage(opts = {}) {
   <\/script></body></html>`;
 }
 
-test('LIVE DOM: the div stepper is found and the search runs', async () => {
+test('LIVE DOM: the stepper is found and the search runs', async () => {
   const { result, clicks } = await probe(livePage());
   assert.equal(result.state, 'unavailable', JSON.stringify(result).slice(0, 400));
-  assert.ok(clicks.includes('plus'), 'must click the div stepper: ' + JSON.stringify(clicks));
+  assert.ok(clicks.includes('qtyButtonPlus-0'), 'must click the stepper: ' + JSON.stringify(clicks));
   // The recorder logs element ids, and the search button's id is 'primary'.
   assert.ok(clicks.includes('primary'), 'must run the search: ' + JSON.stringify(clicks));
+});
+
+test('LIVE DOM: clicks the button itself, not the wrapper div around it', async () => {
+  // The wrapper is the same size and shape as the button and contains it, so
+  // "take the outermost" chose the wrapper -- and a click on a div that
+  // contains a button never activates the button. The quantity stayed at 0 and
+  // the failure surfaced several steps later as "the search button never became
+  // available", which pointed nowhere near the cause.
+  const { result, clicks } = await probe(livePage());
+  assert.equal(result.state, 'unavailable', JSON.stringify(result).slice(0, 300));
+  assert.ok(clicks.includes('qtyButtonPlus-0'), 'must click the button: ' + JSON.stringify(clicks));
+});
+
+test('LIVE DOM: a click that does not move the quantity is reported as such', async () => {
+  // Rather than as a confusing complaint about the search button.
+  const html = livePage().replace(
+    "document.getElementById('qtyButtonPlus-0').addEventListener('click', function () {",
+    "document.getElementById('qtyButtonPlus-0').addEventListener('click', function () { if (1) return;"
+  );
+  const { result } = await probe(html, { readyMs: 4000 });
+  assert.equal(result.state, 'unknown');
+  assert.match(result.detail, /quantity stayed at 0/);
+});
+
+test('LIVE DOM: the decrement is never clicked', async () => {
+  const { clicks } = await probe(livePage());
+  assert.ok(!clicks.includes('qtyButtonSub-0'), JSON.stringify(clicks));
+});
+
+test('LIVE DOM: the baar info button is never clicked', async () => {
+  // Small, square, wordless, and inside the quantity section: the exact shape
+  // the structural finder looks for.
+  const { clicks } = await probe(livePage());
+  assert.ok(!clicks.some((c) => /baar/i.test(c)), JSON.stringify(clicks));
 });
 
 test('LIVE DOM: waits for the late-rendering quantity panel', async () => {
@@ -359,7 +407,7 @@ test('LIVE DOM: waits for the late-rendering quantity panel', async () => {
   // shape changed" when nothing was wrong except the timing.
   const { result, clicks } = await probe(livePage({ panelDelayMs: 1200 }));
   assert.equal(result.state, 'unavailable', JSON.stringify(result).slice(0, 300));
-  assert.ok(clicks.includes('plus'), 'must wait for and click the stepper: ' + JSON.stringify(clicks));
+  assert.ok(clicks.includes('qtyButtonPlus-0'), 'must wait for and click the stepper: ' + JSON.stringify(clicks));
 });
 
 test('LIVE DOM: a panel that never fills says so precisely', async () => {
@@ -370,13 +418,6 @@ test('LIVE DOM: a panel that never fills says so precisely', async () => {
   assert.equal(result.snapshot.quantityPanel, 'panel present but EMPTY');
 });
 
-test('LIVE DOM: a quantity held in an input, not a text node, still works', async () => {
-  // An <input value="0"> has no textContent, so a text-only scan finds no
-  // readout at all. Scoping to #qtySection is what saves this case.
-  const { result, clicks } = await probe(livePage({ inputQty: true }));
-  assert.equal(result.state, 'unavailable', JSON.stringify(result).slice(0, 300));
-  assert.ok(clicks.includes('plus'), JSON.stringify(clicks));
-});
 
 test('LIVE DOM: nothing outside the quantity section is ever a stepper candidate', async () => {
   // Put a small square control elsewhere on the page and make sure the scoped
