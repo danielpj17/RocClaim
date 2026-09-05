@@ -98,6 +98,11 @@ function fixture(opts = {}) {
   const found = opts.seatsAvailable ? 'true' : 'false';
   return `<!doctype html><html><body>
   <nav><a href="/buy">Buy Tickets</a><a href="/promo">Promotions</a><a href="/student">Student Tickets</a></nav>
+  <!-- The real page's furniture, in the real DOM order: all of this sits BEFORE
+       the stepper, so a loose label match hits one of these first. -->
+  <button aria-label="Open the menu">Open the menu</button>
+  <a href="/" aria-label="Go to Main Page">Go to Main Page</a>
+  <button id="moreinfo">More Info</button>
   <div class="card">
     <div class="hdr">Football Season 2026<br>BYU vs Utah Tech<br>Sat, Sep 5, 2026 &bull; 6:00pm<br>LaVell Edwards Stadium</div>
     <h2>${marker}</h2>
@@ -234,6 +239,31 @@ test('a transfer control on the page is never touched', async () => {
   );
   assert.equal(result.state, 'unavailable');
   assert.ok(!clicks.includes('Transfer Ticket'));
+});
+
+test('the page\'s "More Info" button is never mistaken for the stepper', async () => {
+  // The exact live failure: /more/ was in the increment matcher as a synonym
+  // for "increase", "More Info" sits earlier in the DOM than the stepper, so
+  // every cycle opened an info modal and then reported that the search button
+  // never appeared. Substring matching on labels finds the WRONG control long
+  // before it finds none, and that is worse than finding nothing.
+  const { result, clicks } = await probe(fixture());
+  assert.equal(result.state, 'unavailable');
+  assert.ok(!clicks.includes('More Info'), 'clicked More Info: ' + JSON.stringify(clicks));
+  assert.ok(!clicks.includes('Open the menu'), 'clicked the menu: ' + JSON.stringify(clicks));
+  assert.deepEqual(clicks, ['+', 'Find Best Available', 'OK']);
+});
+
+test('no source file carries stray control characters', () => {
+  // Two separate shell-escaping accidents baked a literal 0x08 into a regex in
+  // this extension. It parses, it just silently never matches. Cheap to check.
+  const dir = path.join(__dirname, '..', 'extension');
+  for (const f of require('fs').readdirSync(dir)) {
+    if (!/\.(js|html|json)$/.test(f)) continue;
+    const src = require('fs').readFileSync(path.join(dir, f), 'utf8');
+    const found = src.match(/[\x00-\x08\x0b\x0c\x0e-\x1f]/g);
+    assert.equal(found, null, f + ' contains ' + (found || []).length + ' control character(s)');
+  }
 });
 
 test('an icon-only stepper with an aria-label is found and clicked', async () => {

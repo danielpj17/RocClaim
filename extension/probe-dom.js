@@ -29,10 +29,19 @@ var ROCProbeDom = (function () {
     // text at all -- match on aria-label, title and class as well, and treat a
     // lone "+" glyph in any of the unicode variants as a hit.
     increment: {
-      text: /^[++＋➕]$/,
-      aria: /increment|increase|plus|add(?! to)|more|up/i,
-      title: /increment|increase|plus|add(?! to)|more/i,
-      cls: /(^|[-_ ])(plus|increment|increase|add|stepper-up|qty-up)([-_ ]|$)/i,
+      // ANCHORED, and the anchoring is the whole point. A loose /more/ here --
+      // added as a synonym for "increase" -- matched this page's "More Info"
+      // button, which sits earlier in the DOM than the stepper. Every cycle
+      // opened an info modal and then reported that the search button never
+      // appeared. Substring matching on control labels finds the WRONG control
+      // long before it finds none, which is worse than finding nothing.
+      text: /^[+\uFF0B\u2795]$/,
+      // "add" must carry a noun. A bare leading "Add" matches "Add to calendar"
+      // and "Add to cart", which are exactly the kind of thing that must never
+      // be clicked speculatively.
+      aria: /^(increase|increment|plus|add\s+(one|1|ticket|item))(\s|$)/i,
+      title: /^(increase|increment|plus|add\s+(one|1|ticket|item))(\s|$)/i,
+      cls: /(^|[-_ ])(plus|increment|increase|stepper-up|qty-up)([-_ ]|$)/i,
     },
     // The primary button, in its two states.
     searchButton: /find best available/i,
