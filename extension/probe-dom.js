@@ -56,6 +56,13 @@ var ROCProbeDom = (function () {
     // nothing inside it but the readout and its two controls, so the worst case
     // is clicking a decrement, not a checkout.
     quantitySection: '#qtySection, [data-testid="event-panel-quantity-selector"]',
+    // The stepper renders inside THIS, and it renders late. A dump of the live
+    // page caught it as <div data-testid="QtyPanelNewLayout"></div> -- present
+    // but empty. "Select Your Tickets" is painted long before this fills in, so
+    // waiting on that marker alone means looking before there is anything to
+    // find. Two rounds of selector fixes were chasing a stepper that genuinely
+    // was not in the DOM yet.
+    quantityPanel: '[data-testid="QtyPanelNewLayout"]',
     nothingSelected: /no tickets selected/i,
     // The answer we are polling for.
     seatsNotFound: /seats not found|no seats that matched/i,
@@ -112,6 +119,15 @@ var ROCProbeDom = (function () {
         let c = label;
         for (let i = 0; i < 3 && c.parentElement; i++) c = c.parentElement;
         return (c.outerHTML || '').replace(/\s+/g, ' ').slice(0, 4000);
+      })(),
+      // Whether the late-rendering panel has actually filled in. Empty here means
+      // the probe looked too early, which is a completely different problem from
+      // a selector that does not match.
+      quantityPanel: (function () {
+        const p = document.querySelector(SELECTORS.quantityPanel);
+        if (!p) return 'panel element absent';
+        if (!p.children.length) return 'panel present but EMPTY';
+        return (p.outerHTML || '').replace(/\s+/g, ' ').slice(0, 2500);
       })(),
       controls: els.map((el) => ({
         tag: el.tagName,
@@ -295,14 +311,43 @@ var ROCProbeDom = (function () {
 
     const bodyText = () => (document.body ? document.body.innerText : '');
 
-    // The portal is a React app and content scripts run at document_idle, which
-    // can fire before the app has painted. Reading the DOM at that instant sees
-    // an empty shell, decides the page is wrong, and reloads -- which looks
-    // exactly like "it refreshes but never clicks". So wait for the picker to
-    // actually exist before judging anything.
-    const readyBy = Date.now() + (opts.readyMs || 12000);
-    while (!SELECTORS.pageMarker.test(bodyText()) && Date.now() < readyBy) {
+    // The portal is a React app, and its parts arrive at different times. The
+    // heading paints early; the quantity panel fills in after its own fetch.
+    // So readiness is not "does the page say Select Your Tickets" -- it is "is
+    // there anything here I can actually act on yet".
+    const enabledSearch = () => {
+      const el = document.querySelector(SELECTORS.searchTestId);
+      if (el && usable(el) && !SELECTORS.nothingSelected.test(labelOf(el))) return el;
+      return findControl(SELECTORS.searchButton);
+    };
+    const actionable = () =>
+      SELECTORS.pageMarker.test(bodyText()) &&
+      (findIncrementStructurally() || enabledSearch());
+
+    const readyBy = Date.now() + (opts.readyMs || 15000);
+    while (!actionable() && Date.now() < readyBy) {
       await sleep(250);
+    }
+
+    if (!SELECTORS.pageMarker.test(bodyText())) {
+      return {
+        state: 'unknown',
+        detail: 'the ticket picker never rendered',
+        clicked: [],
+        snapshot: snapshot(),
+      };
+    }
+
+    if (!actionable()) {
+      const panel = document.querySelector(SELECTORS.quantityPanel);
+      return {
+        state: 'unknown',
+        detail: panel && !panel.children.length
+          ? 'the quantity panel is still empty after ' + Math.round((opts.readyMs || 15000) / 1000) + 's'
+          : 'no quantity stepper and no enabled search button appeared',
+        clicked: [],
+        snapshot: snapshot(),
+      };
     }
 
     if (!SELECTORS.pageMarker.test(bodyText())) {

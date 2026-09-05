@@ -160,17 +160,18 @@ function fixture(opts = {}) {
   </body></html>`;
 }
 
-async function probe(html) {
+async function probe(html, opts = {}) {
   const ctx = await browser.newContext();
   const p = await ctx.newPage();
   await p.setContent(html);
   await p.addScriptTag({ path: PROBE_PATH });
-  const result = await p.evaluate(async () =>
+  const result = await p.evaluate(async (o) =>
     ROCProbeDom.runCycle({
       fingerprint: (s) => String(s).replace(/\s+/g, ' ').trim(),
       waitMs: 2500,
+      readyMs: o.readyMs || 6000,
     })
-  );
+  , opts);
   const clicks = await p.evaluate(() => window.__clicks);
   const modalOpen = await p.evaluate(() => {
     const m = document.getElementById('modal');
@@ -294,14 +295,7 @@ function livePage(opts = {}) {
     <section id="qtySection" data-testid="event-panel-quantity-selector">
       <h3>Quantity</h3>
       <p>Must be a minimum of 1, up to 1</p>
-      <div style="display:flex;align-items:center;gap:14px;padding:16px;border:1px solid #ddd">
-        <span style="flex:1">ROC</span>
-        <div id="minus" style="width:32px;height:32px;border-radius:50%;background:#eee"><svg width="12" height="12"></svg></div>
-        ${opts.inputQty
-          ? '<input id="qty" value="0" readonly style="width:24px;text-align:center;border:none">'
-          : '<span id="qty" style="width:20px;text-align:center">0</span>'}
-        <div id="plus" style="width:32px;height:32px;border-radius:50%;background:#002E5D"><svg width="12" height="12"></svg></div>
-      </div>
+      <div><div data-testid="QtyPanelNewLayout" id="qtypanel"></div></div>
     </section>
     <div>$0.00</div>
     <button data-testid="add-to-cart-btn" disabled tabindex="0" id="primary">No Tickets Selected</button>
@@ -317,12 +311,6 @@ function livePage(opts = {}) {
       const el = e.target.closest('button, a, [role=button], input, #plus, #minus');
       if (el) window.__clicks.push(el.id || (el.innerText || '').replace(/\\s+/g,' ').trim());
     }, true);
-    document.getElementById('plus').addEventListener('click', () => {
-      const q = document.getElementById('qty');
-      if (q.tagName === 'INPUT') q.value = '1'; else q.textContent = '1';
-      const p = document.getElementById('primary');
-      p.disabled = false; p.textContent = 'Find Best Available';
-    });
     document.getElementById('primary').addEventListener('click', () => {
       if (${found}) { document.querySelector('h2').textContent = 'Best Available Found'; return; }
       document.getElementById('modal').style.display = 'block';
@@ -330,6 +318,26 @@ function livePage(opts = {}) {
     document.getElementById('ok').addEventListener('click', () => {
       document.getElementById('modal').style.display = 'none';
     });
+    // The live page renders this panel after its own fetch: a dump caught it as
+    // <div data-testid="QtyPanelNewLayout"></div>, present but empty, while the
+    // heading above it was already painted.
+    setTimeout(function () {
+      document.getElementById('qtypanel').innerHTML =
+        '<div style="display:flex;align-items:center;gap:14px;padding:16px">' +
+        '<span style="flex:1">ROC</span>' +
+        '<div id="minus" style="width:32px;height:32px;border-radius:50%;background:#eee"></div>' +
+        (${opts.inputQty ? 'true' : 'false'}
+          ? '<input id="qty" value="0" readonly style="width:24px;text-align:center;border:none">'
+          : '<span id="qty" style="width:20px;text-align:center">0</span>') +
+        '<div id="plus" style="width:32px;height:32px;border-radius:50%;background:#002E5D"></div>' +
+        '</div>';
+      document.getElementById('plus').addEventListener('click', function () {
+        var q = document.getElementById('qty');
+        if (q.tagName === 'INPUT') q.value = '1'; else q.textContent = '1';
+        var p = document.getElementById('primary');
+        p.disabled = false; p.textContent = 'Find Best Available';
+      });
+    }, ${opts.panelDelayMs === undefined ? 900 : opts.panelDelayMs});
     document.querySelector('[data-testid=more-info-modal]').addEventListener('click', () => {
       document.body.insertAdjacentHTML('beforeend', '<div id="infomodal">Season tickets go on sale...</div>');
     });
@@ -342,6 +350,24 @@ test('LIVE DOM: the div stepper is found and the search runs', async () => {
   assert.ok(clicks.includes('plus'), 'must click the div stepper: ' + JSON.stringify(clicks));
   // The recorder logs element ids, and the search button's id is 'primary'.
   assert.ok(clicks.includes('primary'), 'must run the search: ' + JSON.stringify(clicks));
+});
+
+test('LIVE DOM: waits for the late-rendering quantity panel', async () => {
+  // THE bug. QtyPanelNewLayout is empty at load and fills in after its own
+  // fetch, while "Select Your Tickets" is already painted. Waiting on the
+  // heading meant looking before the stepper existed, and reporting "the page
+  // shape changed" when nothing was wrong except the timing.
+  const { result, clicks } = await probe(livePage({ panelDelayMs: 1200 }));
+  assert.equal(result.state, 'unavailable', JSON.stringify(result).slice(0, 300));
+  assert.ok(clicks.includes('plus'), 'must wait for and click the stepper: ' + JSON.stringify(clicks));
+});
+
+test('LIVE DOM: a panel that never fills says so precisely', async () => {
+  // And it must not blame the selectors for what is really a timeout.
+  const { result } = await probe(livePage({ panelDelayMs: 999999 }), { readyMs: 1500 });
+  assert.equal(result.state, 'unknown');
+  assert.match(result.detail, /quantity panel is still empty/);
+  assert.equal(result.snapshot.quantityPanel, 'panel present but EMPTY');
 });
 
 test('LIVE DOM: a quantity held in an input, not a text node, still works', async () => {
