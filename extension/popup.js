@@ -55,9 +55,9 @@ async function render() {
 text: ${(snap.text || '').slice(0, 120)}
 controls:
 ${rows}`;
-    diag.hidden = false;
+    $('diagwrap').hidden = false;
   } else {
-    diag.hidden = true;
+    $('diagwrap').hidden = true;
   }
 
   $('log').textContent = (st.log || [])
@@ -129,6 +129,21 @@ $('test').addEventListener('click', async () => {
     priority: 'default',
   });
   setTimeout(render, 800);
+});
+
+// The diagnostic box is small and the interesting part is usually the markup of
+// a control that has no label. One click puts the whole thing on the clipboard.
+$('copydiag').addEventListener('click', async () => {
+  const st = await get(['lastSnapshot', 'lastResult']);
+  const text = JSON.stringify({ lastResult: st.lastResult, snapshot: st.lastSnapshot }, null, 1);
+  try {
+    await navigator.clipboard.writeText(text);
+    $('copydiag').textContent = 'Copied — paste it to Claude';
+  } catch {
+    $('diag').textContent = text; // clipboard blocked: at least show it all
+    $('copydiag').textContent = 'Clipboard blocked — select the text below';
+  }
+  setTimeout(() => ($('copydiag').textContent = 'Copy diagnostics'), 4000);
 });
 
 $('topic').addEventListener('change', async () => {

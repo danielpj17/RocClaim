@@ -81,7 +81,7 @@ var ROCProbeDom = (function () {
   // What the probe could see, for the times it could not make sense of it.
   // Guessing selectors twice is worse than reporting once what is really there.
   function snapshot(limit) {
-    const els = Array.from(document.querySelectorAll(CONTROL_SELECTOR)).slice(0, limit || 14);
+    const els = Array.from(document.querySelectorAll(CONTROL_SELECTOR)).slice(0, limit || 40);
     return {
       url: location.href,
       marker: SELECTORS.pageMarker.test(document.body ? document.body.innerText : ''),
@@ -90,8 +90,13 @@ var ROCProbeDom = (function () {
         tag: el.tagName,
         txt: labelOf(el).slice(0, 30),
         aria: el.getAttribute('aria-label') || null,
+        title: el.getAttribute('title') || null,
         cls: (typeof el.className === 'string' ? el.className : '').slice(0, 40),
         dis: el.hasAttribute('disabled') || el.getAttribute('aria-disabled') === 'true',
+        // The markup itself, because an icon button with no text and no
+        // aria-label is invisible to every label-based matcher and the only way
+        // to identify it is to look at what it actually is.
+        html: (el.outerHTML || '').replace(/\s+/g, ' ').slice(0, 160),
       })),
     };
   }
@@ -114,6 +119,43 @@ var ROCProbeDom = (function () {
     if (el.hasAttribute('disabled') || el.getAttribute('aria-disabled') === 'true') return false;
     const style = typeof getComputedStyle === 'function' ? getComputedStyle(el) : null;
     return !style || (style.visibility !== 'hidden' && style.display !== 'none');
+  }
+
+  // Finding the stepper by name does not work on this page: it is an icon button
+  // with no text and no aria-label, so there is nothing to match against. This
+  // finds it by shape instead -- the quantity row is a container holding a bare
+  // number and two small buttons, minus on the left and plus on the right.
+  //
+  // Guessing structurally is a real departure from "never click speculatively",
+  // so it is fenced hard: the candidate must sit in a row with a bare integer
+  // and at least two buttons, it must be the last of them, its label must be
+  // empty or a single glyph (an icon, not a worded button like "Checkout"), and
+  // it must clear the refusal list. A worded control can never be chosen here.
+  const GLYPHY = /^.{0,2}$/;
+
+  function findIncrementStructurally() {
+    const rows = [];
+    const containers = document.querySelectorAll('div, span, li, td, section, p');
+    for (const el of containers) {
+      for (const n of el.childNodes) {
+        if (n.nodeType === 3 && /^\s*\d{1,3}\s*$/.test(n.nodeValue || '')) {
+          rows.push(el);
+          break;
+        }
+      }
+    }
+    for (const row of rows) {
+      for (let c = row, depth = 0; c && depth < 4; c = c.parentElement, depth++) {
+        const btns = Array.from(c.querySelectorAll('button, [role="button"]')).filter(usable);
+        if (btns.length < 2) continue;
+        const candidate = btns[btns.length - 1];
+        const label = labelOf(candidate);
+        if (label && !GLYPHY.test(label)) continue;   // worded control: not a stepper
+        if (label && NEVER.test(label)) continue;
+        return candidate;
+      }
+    }
+    return null;
   }
 
   function findControl(match, { requireUsable = true } = {}) {
@@ -229,7 +271,12 @@ var ROCProbeDom = (function () {
     // This is gated only by the allowlist, not by the price: setting a quantity
     // commits nothing. The search click below is where the money check bites.
     if (!findControl(SELECTORS.searchButton)) {
-      const plus = findControl(SELECTORS.increment);
+      let plus = findControl(SELECTORS.increment);
+      let byShape = false;
+      if (!plus) {
+        plus = findIncrementStructurally();
+        byShape = !!plus;
+      }
       if (!plus) {
         return {
           state: 'unknown',
@@ -238,11 +285,19 @@ var ROCProbeDom = (function () {
           snapshot: snapshot(),
         };
       }
-      if (!isAllowedControl(labelOf(plus) || '+')) {
-        return { state: 'refused', detail: 'the stepper did not pass the allowlist', clicked };
+      // A structurally-found stepper has already passed a stricter test than the
+      // allowlist could apply -- it has no usable label to match on, which is
+      // precisely why it was found this way.
+      if (!byShape && !isAllowedControl(labelOf(plus) || '+')) {
+        return {
+          state: 'refused',
+          detail: 'the stepper did not pass the allowlist: "' + labelOf(plus) + '"',
+          clicked,
+          snapshot: snapshot(),
+        };
       }
       plus.click();
-      clicked.push('quantity +');
+      clicked.push(byShape ? 'quantity + (by shape)' : 'quantity +');
       log('set quantity to 1');
       await sleep(settleMs);
     }
@@ -337,6 +392,7 @@ var ROCProbeDom = (function () {
     runCycle,
     // exported for tests
     findControl,
+    findIncrementStructurally,
     labelOf,
   };
 })();

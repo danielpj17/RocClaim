@@ -113,7 +113,10 @@ function fixture(opts = {}) {
     <p>Maximum of 1</p>
     <div class="row">
       <span>Student Entry Group 4</span>
-      <button id="minus">&minus;</button><span id="qty">0</span><button id="plus">+</button>
+      ${opts.iconStepper
+        ? '<button id="minus"><svg width="12" height="12"></svg></button><span id="qty">0</span>' +
+          '<button id="plus"><svg width="12" height="12"></svg></button>'
+        : '<button id="minus">&minus;</button><span id="qty">0</span><button id="plus">+</button>'}
     </div>
     <div class="price">${price}</div>
     <label><input type="checkbox"> Search seats across multiple rows</label>
@@ -264,6 +267,29 @@ test('no source file carries stray control characters', () => {
     const found = src.match(/[\x00-\x08\x0b\x0c\x0e-\x1f]/g);
     assert.equal(found, null, f + ' contains ' + (found || []).length + ' control character(s)');
   }
+});
+
+test('a nameless icon stepper is found by shape', async () => {
+  // The live page's + is an icon button with no text and no aria-label, so no
+  // label matcher can ever see it. Found structurally instead: a container with
+  // a bare number and two buttons, take the right-hand one.
+  const { result, clicks } = await probe(fixture({ iconStepper: true }));
+  assert.equal(result.state, 'unavailable', JSON.stringify(result));
+  assert.ok(clicks.includes('Find Best Available'), 'the search must have run: ' + JSON.stringify(clicks));
+  assert.ok(!clicks.includes('More Info'), 'and it must still not touch More Info');
+});
+
+test('the shape finder refuses worded buttons', async () => {
+  // The fence on structural guessing: only a glyph or icon can be chosen this
+  // way, never something like Checkout that happens to sit next to a number.
+  const html = fixture({ iconStepper: true }).replace(
+    '<button id="primary" disabled>No Tickets Selected</button>',
+    '<div>3 <button>Checkout</button><button>Continue</button></div>' +
+    '<button id="primary" disabled>No Tickets Selected</button>'
+  );
+  const { clicks } = await probe(html);
+  assert.ok(!clicks.includes('Checkout'), 'must never pick a worded control: ' + JSON.stringify(clicks));
+  assert.ok(!clicks.includes('Continue'), 'must never pick a worded control: ' + JSON.stringify(clicks));
 });
 
 test('an icon-only stepper with an aria-label is found and clicked', async () => {

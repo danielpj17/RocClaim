@@ -99,7 +99,12 @@
       Runs the seat search every 30&ndash;45s: sets quantity to 1 and clicks <b>Find Best Available</b>. It never clicks past the search &mdash; if a seat is found it stops and leaves the page for you. The seat is held ~10 min.
     </div>
 
-    <pre id="diag" hidden></pre>
+    <div id="diagwrap" hidden>
+      <button id="copydiag" style="flex:none;width:100%;margin-top:10px;background:#8883;color:inherit;font-weight:400">
+        Copy diagnostics
+      </button>
+      <pre id="diag"></pre>
+    </div>
     <div id="log"></div>
 
     <script src="popup.js"></script>
