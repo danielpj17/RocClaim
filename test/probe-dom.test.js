@@ -90,7 +90,8 @@ test.after(async () => {
 
 // Rebuilt from the screenshots, wording included.
 function fixture(opts = {}) {
-  const price = opts.price === undefined ? '$0.00/ea' : opts.price;
+  const price = opts.priceAfterQty ? '' : (opts.price === undefined ? '$0.00/ea' : opts.price);
+  const priceAfterQty = opts.priceAfterQty ? 'true' : 'false';
   const marker = opts.noMarker ? 'Tickets' : 'Select Your Tickets';
   const extra = opts.extraControls || '';
   const dead = opts.deadSearch ? 'true' : 'false';
@@ -132,6 +133,7 @@ function fixture(opts = {}) {
       qty.textContent = '1';
       primary.disabled = false;
       primary.textContent = 'Find Best Available';
+      if (${priceAfterQty}) document.querySelector('.price').textContent = '$0.00/ea';
     });
     primary.addEventListener('click', () => {
       if (${dead}) return;                        // a search button that does nothing
@@ -201,10 +203,29 @@ test('a real price on the page refuses before touching anything', async () => {
   assert.deepEqual(clicks, [], 'nothing may be clicked once money is on the page');
 });
 
-test('no price at all refuses too', async () => {
+test('no price at all does NOT stop the watch -- it retries', async () => {
+  // This is the one that cost a live run. "No $0.00 on the page" is ambiguous:
+  // usually the page has simply not finished rendering. Refusing to click is
+  // right; stopping the whole watch is not. It comes back as unknown, which
+  // retries and is bounded by the blind-probe streak.
   const { result, clicks } = await probe(fixture({ price: '' }));
+  assert.equal(result.state, 'unknown');
+  assert.ok(!clicks.includes('Find Best Available'), 'must not run the search without price evidence');
+  assert.ok(result.snapshot, 'and it must report what it saw');
+});
+
+test('a price that appears only after a quantity is chosen still works', async () => {
+  // The real soccer page renders the amount below the fold / after selection,
+  // so gating the quantity click on the price deadlocked the cycle.
+  const { result, clicks } = await probe(fixture({ priceAfterQty: true }));
+  assert.equal(result.state, 'unavailable');
+  assert.deepEqual(clicks, ['+', 'Find Best Available', 'OK']);
+});
+
+test('a non-zero price still stops everything, before any click', async () => {
+  const { result, clicks } = await probe(fixture({ price: '$25.00' }));
   assert.equal(result.state, 'refused');
-  assert.deepEqual(clicks, []);
+  assert.deepEqual(clicks, [], 'money on the page means touch nothing');
 });
 
 test('a transfer control on the page is never touched', async () => {

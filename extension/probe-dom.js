@@ -138,8 +138,18 @@ var ROCProbeDom = (function () {
       .filter((n) => Number.isFinite(n));
     const max = amounts.length ? Math.max(...amounts) : 0;
     const hasZero = amounts.some((n) => n === 0) || /\b(free|no charge)\b/i.test(text || '');
-    if (!hasZero) return { ok: false, reason: 'no $0.00 or "free" on the page', found, max };
-    if (max > 0) return { ok: false, reason: 'a non-zero amount is on the page', found, max };
+    // Two different answers, and collapsing them is a mistake:
+    //
+    //   nonZero    -- the page shows real money. DANGEROUS. Stop the watch.
+    //   noEvidence -- no amount at all. AMBIGUOUS, usually just a page that has
+    //                 not finished rendering. Do not click, but do not give up
+    //                 either; retry next cycle. The bounded unknown-streak is
+    //                 what stops us looping on this forever.
+    //
+    // The rule from claim.js is intact: absence of a price never authorises a
+    // click. It just no longer kills the watch.
+    if (max > 0) return { ok: false, kind: 'nonZero', reason: 'a non-zero amount is on the page', found, max };
+    if (!hasZero) return { ok: false, kind: 'noEvidence', reason: 'no $0.00 or "free" on the page yet', found, max };
     return { ok: true, found, max };
   }
 
@@ -192,17 +202,23 @@ var ROCProbeDom = (function () {
 
     const clicked = [];
 
-    // Gate before touching anything.
+    // A non-zero price is checked up front, because that is the dangerous case
+    // and it should stop us before we touch anything at all. The *absence* of a
+    // price is not checked here: on this page the amount can render after a
+    // quantity is chosen, so demanding it up front deadlocks the cycle.
     let price = priceVerdict(bodyText());
-    if (!price.ok) {
+    if (!price.ok && price.kind === 'nonZero') {
       return {
         state: 'refused',
         detail: 'price gate: ' + price.reason + (price.found.length ? ' (' + price.found.join(', ') + ')' : ''),
         clicked,
+        snapshot: snapshot(),
       };
     }
 
     // 1. Quantity. If the primary button says nothing is selected, press +.
+    // This is gated only by the allowlist, not by the price: setting a quantity
+    // commits nothing. The search click below is where the money check bites.
     if (!findControl(SELECTORS.searchButton)) {
       const plus = findControl(SELECTORS.increment);
       if (!plus) {
@@ -235,9 +251,32 @@ var ROCProbeDom = (function () {
 
     // 3. Re-read the price against the live page immediately before clicking,
     // not just at scan time -- the page may have re-rendered underneath us.
+    // Re-read against the live page, now that a quantity is set and the amount
+    // has had a chance to appear.
+    const priceBy = Date.now() + (opts.priceMs || 5000);
     price = priceVerdict(bodyText());
+    while (!price.ok && price.kind === 'noEvidence' && Date.now() < priceBy) {
+      await sleep(200);
+      price = priceVerdict(bodyText());
+    }
+    if (!price.ok && price.kind === 'nonZero') {
+      return {
+        state: 'refused',
+        detail: 'price gate tripped before the click: ' + price.reason +
+          (price.found.length ? ' (' + price.found.join(', ') + ')' : ''),
+        clicked,
+        snapshot: snapshot(),
+      };
+    }
     if (!price.ok) {
-      return { state: 'refused', detail: 'price gate tripped before the click: ' + price.reason, clicked };
+      // Still no amount anywhere. Refuse the click -- absence of a price is not
+      // evidence of free -- but stay watching and try again next cycle.
+      return {
+        state: 'unknown',
+        detail: 'no $0.00 or "free" appeared on the page, so the search was not run',
+        clicked,
+        snapshot: snapshot(),
+      };
     }
     const label = labelOf(search);
     if (!isAllowedControl(label)) {
