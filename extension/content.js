@@ -80,6 +80,7 @@ async function runProbe(st, polls) {
         'put it. Nothing past the search was clicked -- finish the claim yourself.\n' +
         location.href,
       priority: 'urgent',
+      click: location.href,
     });
     return;
   }

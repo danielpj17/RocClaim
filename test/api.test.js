@@ -199,3 +199,30 @@ test('the search always asks for exactly one free seat', () => {
   assert.equal(c.priceFrom, 0);
   assert.equal(c.priceTo, 0, 'belt and braces with the price gate');
 });
+
+// --- ntfy priority ----------------------------------------------------------
+
+test('ntfy priorities are sent as numbers, not names it does not know', () => {
+  // The live symptom: pushes arrived in the ntfy app but never buzzed the
+  // phone. ntfy's priority names are max/high/default/low/min -- "urgent" is
+  // not one of them, and an unrecognised Priority header is silently treated as
+  // default. A default-priority push does not wake a phone.
+  const fs = require('node:fs');
+  const path = require('node:path');
+  for (const dir of ['extension', 'extension-api']) {
+    const src = fs.readFileSync(path.join(__dirname, '..', dir, 'background.js'), 'utf8');
+    assert.match(src, /Priority: ntfyPriority\(/, dir + ' must map priority before sending');
+    assert.equal(
+      /Priority: String\(msg\.priority/.test(src),
+      false,
+      dir + ' must not send the raw name'
+    );
+
+    // Evaluate the helper straight out of the shipped source.
+    const fn = new Function(src.match(/function ntfyPriority[\s\S]*?\n\}/)[0] + '; return ntfyPriority;')();
+    assert.equal(fn('urgent'), '5', 'urgent must become max, or the phone stays quiet');
+    assert.equal(fn('high'), '4');
+    assert.equal(fn('default'), '3');
+    assert.equal(fn(undefined), '3');
+  }
+});

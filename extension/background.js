@@ -53,6 +53,20 @@ function logLine(line) {
   return logChain;
 }
 
+// ntfy takes priority as a number 1..5, and only certain names. "urgent" is NOT
+// one of ntfy's names -- its list is max/high/default/low/min -- and an
+// unrecognised Priority is silently downgraded to default. A default-priority
+// push does not wake a phone: it lands in the app and shows no banner, which is
+// precisely the "I can see them in the app but they don't get pushed" symptom.
+// Numbers are unambiguous, so send numbers.
+function ntfyPriority(p) {
+  if (p === 'urgent' || p === 'max' || p === 5) return '5';
+  if (p === 'high' || p === 4) return '4';
+  if (p === 'low' || p === 2) return '2';
+  if (p === 'min' || p === 1) return '1';
+  return '3';
+}
+
 async function notify(msg) {
   const { topic, server } = await get(['topic', 'server']);
   const base = server || DEFAULT_SERVER;
@@ -79,11 +93,16 @@ async function notify(msg) {
   try {
     const res = await fetch(base + '/' + encodeURIComponent(topic), {
       method: 'POST',
-      headers: {
-        Title: msg.title || 'ROC Claim Watcher',
-        Priority: String(msg.priority || 'default'),
-        Tags: 'ticket',
-      },
+      headers: Object.assign(
+        {
+          Title: msg.title || 'ROC Claim Watcher',
+          Priority: ntfyPriority(msg.priority),
+          Tags: 'ticket',
+        },
+        // Makes the notification tappable straight through to the page. Worth
+        // seconds when a seat is held for ten minutes.
+        msg.click ? { Click: msg.click } : {}
+      ),
       body: msg.message || '',
     });
     await logLine((res.ok ? 'pushed: ' : 'push failed (' + res.status + '): ') + msg.title);
