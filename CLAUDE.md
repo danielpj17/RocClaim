@@ -412,6 +412,35 @@ response shape, which the code treats as "any clean answer without a cartId".
 is not. Until the API watcher has completed one real cycle, the DOM extension
 is the one to trust.
 
+### PerimeterX 403s a gql call even in a normal session (found 2026-09-07)
+
+`recon/claim-success.har` entry [15] is a `POST /pac-api/consumer/gql` that came
+back **403 with a PerimeterX block payload** — `appId`, `vid`, and a
+`blockScript` pointing at `captcha.px-cdn.net`. That happened inside Daniel's
+own entirely normal browser session; the app retried and entry [73] succeeded.
+
+Two consequences:
+
+- **The API watcher can be challenged and cannot answer.** It sends exactly that
+  shape of request from a service worker with no page context, so a 403 is a
+  plausible steady state rather than a freak event. The code already treats 403
+  as `unknown` rather than "no seats", and five in a row stops the watch loudly.
+  That is the correct behaviour and worth keeping.
+- **This argues FOR the DOM probe, not against it.** The DOM probe drives the
+  real page, where Paciolan's own PerimeterX client handles a challenge exactly
+  as it does for a human. The API path has no such client and never will.
+
+So section 0.9's framing — the API detector as a strict upgrade — is too
+confident. It is faster and far less fragile against UI changes, and it is more
+exposed to bot detection. Run either, but expect the API one to meet a 403
+first.
+
+**And to be explicit, because it will come up again:** the answer to a
+challenge is never to solve it programmatically. Section 0 covers why. The
+answer is that his own Chrome is not flagged — 37 PerimeterX requests in that
+capture and it let him through — so the challenge mostly does not arise, and
+when it does he clears it himself and the watcher says loudly that it stopped.
+
 
 ---
 

@@ -16,7 +16,7 @@ async function render() {
   const st = await get([
     'enabled', 'targetUrl', 'eventTitle', 'seasonCode', 'itemCode', 'authz',
     'stopAt', 'polls', 'lastCheck', 'lastResult', 'lastDetail', 'nextPollAt',
-    'stoppedReason', 'stoppedAt', 'topic', 'log', 'provider', 'tgToken', 'tgChat', 'discordUrl', 'cartSnapshot', 'cartSnapshotAt', 'autoClaim', 'claimResult', 'criteria', 'cartId',
+    'stoppedReason', 'stoppedAt', 'topic', 'log', 'provider', 'tgToken', 'tgChat', 'discordUrl', 'cartSnapshot', 'cartSnapshotAt', 'lastRawAnswer', 'autoClaim', 'claimResult', 'criteria', 'cartId',
   ]);
 
   const provider = st.provider || 'telegram';
@@ -65,6 +65,7 @@ async function render() {
     bits.push('<span class="muted">cart page captured ' + fmt(st.cartSnapshotAt) + ' &mdash; send it to Claude</span>');
   }
   $('status').innerHTML = bits.join('<br>');
+  $('diagwrap').hidden = !(st.cartSnapshot || st.lastRawAnswer);
 
   $('log').textContent = (st.log || [])
     .slice(-8)
@@ -126,6 +127,31 @@ $('tgFind').addEventListener('click', async () => {
       $('status').innerHTML = '<span class="off">Could not find it:</span> ' + ((r && r.reason) || 'no answer');
     }
   });
+});
+
+// Hands over whatever has been captured -- the cart page above all, since its
+// markup is the last guessed thing in the project.
+$('copydiag').addEventListener('click', async () => {
+  const st = await get(['cartSnapshot', 'cartSnapshotAt', 'lastResult', 'lastRawAnswer', 'claimResult', 'claimDetail']);
+  const text = JSON.stringify(
+    {
+      lastResult: st.lastResult,
+      lastRawAnswer: st.lastRawAnswer,
+      claimResult: st.claimResult,
+      claimDetail: st.claimDetail,
+      cartSnapshot: st.cartSnapshot,
+    },
+    null,
+    1
+  );
+  try {
+    await navigator.clipboard.writeText(text);
+    $('copydiag').textContent = 'Copied — paste it to Claude';
+  } catch {
+    $('diag').textContent = text;
+    $('copydiag').textContent = 'Clipboard blocked — select the text below';
+  }
+  setTimeout(() => ($('copydiag').textContent = 'Copy diagnostics'), 4000);
 });
 
 $('start').addEventListener('click', async () => {

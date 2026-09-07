@@ -55,6 +55,18 @@
         background: #f5a62322;
         border: 1px solid #f5a62366;
       }
+      #diag {
+        margin-top: 10px;
+        max-height: 150px;
+        overflow: auto;
+        font-size: 10px;
+        font-family: ui-monospace, Consolas, monospace;
+        white-space: pre-wrap;
+        background: #f5a62318;
+        border: 1px solid #f5a62355;
+        border-radius: 5px;
+        padding: 7px;
+      }
       #log {
         margin-top: 10px;
         max-height: 110px;
@@ -131,6 +143,12 @@
       It never sends the checkout; you finish that yourself.
     </div>
 
+    <div id="diagwrap" hidden>
+      <button id="copydiag" style="width:100%;margin-top:10px;background:#8883;color:inherit;font-weight:400">
+        Copy diagnostics
+      </button>
+      <pre id="diag"></pre>
+    </div>
     <div id="log"></div>
     <script src="api.js"></script>
     <script src="push.js"></script>
