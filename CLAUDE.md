@@ -473,6 +473,50 @@ notify-only build gave.
 
 ---
 
+## 0.11. Notifications: the destination is a setting now (2026-09-07)
+
+ntfy was chosen in section 8, when this was a Node server and it was the only
+no-signup option. **On Daniel's iPhone it never worked.** Messages appeared in
+the ntfy app only when he opened it, at every priority from 3 to 5 — which means
+APNs was not delivering at all, so no setting on our side could have fixed it. A
+notifier that cannot wake a phone in a pocket is not doing the one job it has.
+
+Diagnosed by sending graded test pushes straight to his topic: priority 3, 4, 5,
+and 5 with a Click header. All four returned HTTP 200 and none produced a
+banner. That splits the problem cleanly — our side was fine, the last mile was
+not. Worth repeating that trick before changing code next time.
+
+So `push.js` makes the destination a setting:
+
+- **Telegram** (default). Free forever, its iOS push is reliable, one HTTPS
+  POST. Needs a bot token from @BotFather and a chat id.
+- **ntfy**. Kept — it costs nothing to offer and works fine on Android.
+- **Discord webhook**. Free, and useful if you already live in a server.
+
+Two things in there are load-bearing and easy to get wrong:
+
+- **Telegram MarkdownV2 rejects any message containing an unescaped reserved
+  character** — the set is `_ * [ ] ( ) ~ backtick > # + - = | { } . !` plus
+  backslash — and these notifications are full of URLs, dashes and dollar
+  amounts. A rejected message is a silent miss, so `escapeMd` runs over
+  everything. Note the dollar sign is NOT reserved: escaping it would make the
+  message read `\$0.00`. A test pins both directions.
+- **Telegram refuses with HTTP 200 and `ok:false` in the body.** Treating a 200
+  as success would mean believing a push went out when it did not, so
+  `accepted()` reads the body for Telegram specifically.
+
+`push.js` is byte-identical in both extensions with a drift test, the same
+arrangement as `close-cart.js`. Both popups gained a provider picker, and
+**Test now reports what actually happened** rather than leaving "I pressed it
+and nothing came" ambiguous.
+
+Also improved while in here: desktop notifications are sticky
+(`requireInteraction`) for urgent and high priorities and carry an "Open it"
+button, since a toast that fades after five seconds is useless against a
+ten-minute hold.
+
+---
+
 ## 1. What this is
 
 A watcher that monitors the BYU ROC **last-chance / returned-ticket** claim and
@@ -1075,7 +1119,7 @@ countdown is not a change, "COMING SOON" becoming "Buy" *is*, and
 
 ## 13. Test suite
 
-**172 tests, all passing** (`npm test`), 49 of them driving real headless
+**182 tests, all passing** (`npm test`), 49 of them driving real headless
 Chromium against real DOM.
 
 - `test/watcher.test.js` — 16, fake clock, no network

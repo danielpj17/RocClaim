@@ -211,27 +211,26 @@ test('the search always asks for exactly one free seat', () => {
 
 // --- ntfy priority ----------------------------------------------------------
 
-test('ntfy priorities are sent as numbers, not names it does not know', () => {
-  // The live symptom: pushes arrived in the ntfy app but never buzzed the
-  // phone. ntfy's priority names are max/high/default/low/min -- "urgent" is
-  // not one of them, and an unrecognised Priority header is silently treated as
-  // default. A default-priority push does not wake a phone.
+test('the notifier never sends a priority name ntfy does not know', () => {
+  // The live symptom: pushes arrived in the ntfy app but never buzzed. ntfy's
+  // names are max/high/default/low/min -- "urgent" is not one, and an
+  // unrecognised Priority is silently downgraded to default, which does not
+  // wake a phone. The mapping now lives in push.js; this asserts neither
+  // background script has grown its own copy that could drift.
   const fs = require('node:fs');
   const path = require('node:path');
   for (const dir of ['extension', 'extension-api']) {
-    const src = fs.readFileSync(path.join(__dirname, '..', dir, 'background.js'), 'utf8');
-    assert.match(src, /Priority: ntfyPriority\(/, dir + ' must map priority before sending');
+    const bg = fs.readFileSync(path.join(__dirname, '..', dir, 'background.js'), 'utf8');
     assert.equal(
-      /Priority: String\(msg\.priority/.test(src),
+      bg.includes('Priority: String(msg.priority'),
       false,
-      dir + ' must not send the raw name'
+      dir + ' must not send the raw priority name'
     );
-
-    // Evaluate the helper straight out of the shipped source.
-    const fn = new Function(src.match(/function ntfyPriority[\s\S]*?\n\}/)[0] + '; return ntfyPriority;')();
-    assert.equal(fn('urgent'), '5', 'urgent must become max, or the phone stays quiet');
-    assert.equal(fn('high'), '4');
-    assert.equal(fn('default'), '3');
-    assert.equal(fn(undefined), '3');
+    assert.equal(
+      bg.includes('function ntfyPriority'),
+      false,
+      dir + ' must use the shared mapping in push.js, not a private copy'
+    );
+    assert.ok(bg.includes('ROCPush.build('), dir + ' must route through the shared notifier');
   }
 });

@@ -70,8 +70,29 @@
     <h1>ROC API Watcher</h1>
     <div class="sub">Asks BYU's seat-search endpoint directly. No page reloading.</div>
 
-    <label for="topic">ntfy topic</label>
-    <input id="topic" placeholder="roc-..." />
+    <label for="provider">Notify my phone via</label>
+    <select id="provider" style="width:100%;box-sizing:border-box;padding:6px 7px;font:inherit;border:1px solid #8884;border-radius:5px;background:#8881;color:inherit">
+      <option value="telegram">Telegram (free, works on iPhone)</option>
+      <option value="ntfy">ntfy</option>
+      <option value="discord">Discord webhook</option>
+    </select>
+
+    <div id="f-ntfy" hidden>
+      <label for="topic">ntfy topic</label>
+      <input id="topic" placeholder="roc-..." />
+    </div>
+
+    <div id="f-telegram" hidden>
+      <label for="tgToken">Bot token</label>
+      <input id="tgToken" placeholder="123456789:AA..." />
+      <label for="tgChat">Chat ID</label>
+      <input id="tgChat" placeholder="123456789" />
+    </div>
+
+    <div id="f-discord" hidden>
+      <label for="discordUrl">Webhook URL</label>
+      <input id="discordUrl" placeholder="https://discord.com/api/webhooks/..." />
+    </div>
 
     <label for="stop-at">Stop at</label>
     <input id="stop-at" type="datetime-local" />
@@ -103,6 +124,7 @@
 
     <div id="log"></div>
     <script src="api.js"></script>
+    <script src="push.js"></script>
     <script src="popup.js"></script>
   </body>
 </html>

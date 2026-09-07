@@ -15,10 +15,16 @@ function localInputValue(d) {
 async function render() {
   const st = await get([
     'enabled', 'targetUrl', 'stopAt', 'polls', 'lastCheck',
-    'stoppedReason', 'stoppedAt', 'topic', 'log', 'autoClaim', 'claimResult', 'lastResult', 'nextPollAt', 'lastSnapshot',
+    'stoppedReason', 'stoppedAt', 'topic', 'log', 'provider', 'tgToken', 'tgChat', 'discordUrl', 'autoClaim', 'claimResult', 'lastResult', 'nextPollAt', 'lastSnapshot',
   ]);
 
+  const provider = st.provider || 'ntfy';
+  if (!$('provider').dataset.touched) $('provider').value = provider;
+  showProviderFields($('provider').value);
   if (st.topic && !$('topic').value) $('topic').value = st.topic;
+  if (st.tgToken && !$('tgToken').value) $('tgToken').value = st.tgToken;
+  if (st.tgChat && !$('tgChat').value) $('tgChat').value = st.tgChat;
+  if (st.discordUrl && !$('discordUrl').value) $('discordUrl').value = st.discordUrl;
   $('autoclaim').checked = !!st.autoClaim;
   if (st.stopAt && !$('stop-at').value) $('stop-at').value = localInputValue(new Date(Number(st.stopAt)));
 
@@ -75,6 +81,37 @@ ${rows}`;
     .join('\n');
 }
 
+function showProviderFields(p) {
+  for (const name of ['ntfy', 'telegram', 'discord']) {
+    $('f-' + name).hidden = name !== p;
+  }
+}
+
+// Saved on every edit rather than only on blur: half-entered credentials that
+// silently do not persist is a bad way to find out your phone was never going
+// to ring.
+async function saveProvider() {
+  await set({
+    provider: $('provider').value,
+    topic: $('topic').value.trim(),
+    tgToken: $('tgToken').value.trim(),
+    tgChat: $('tgChat').value.trim(),
+    discordUrl: $('discordUrl').value.trim(),
+  });
+}
+
+$('provider').addEventListener('change', async () => {
+  $('provider').dataset.touched = '1';
+  showProviderFields($('provider').value);
+  await saveProvider();
+  await render();
+});
+
+for (const id of ['topic', 'tgToken', 'tgChat', 'discordUrl']) {
+  $(id).addEventListener('change', saveProvider);
+  $(id).addEventListener('blur', saveProvider);
+}
+
 $('start').addEventListener('click', async () => {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   if (!tab || !/^https:\/\/byutickets\.evenue\.net\//.test(tab.url || '')) {
@@ -129,14 +166,25 @@ $('stop').addEventListener('click', async () => {
 });
 
 $('test').addEventListener('click', async () => {
-  await set({ topic: $('topic').value.trim() });
-  chrome.runtime.sendMessage({
-    type: 'notify',
-    title: 'ROC Claim Watcher test',
-    message: 'If this reached your phone, the topic is right.',
-    priority: 'default',
-  });
-  setTimeout(render, 800);
+  await saveProvider();
+  $('test').textContent = '...';
+  chrome.runtime.sendMessage(
+    {
+      type: 'notify',
+      title: 'ROC test',
+      message: 'If this reached your phone, notifications are working.',
+      priority: 'high',
+    },
+    (r) => {
+      void chrome.runtime.lastError;
+      // Say plainly whether the provider accepted it. "I pressed Test and
+      // nothing happened" should never again be ambiguous.
+      $('test').textContent = 'Test';
+      if (r && r.pushed) $('status').innerHTML = '<span class="on">Test sent.</span> If your phone stayed quiet, the provider accepted it but the phone is not showing it.';
+      else if (r) $('status').innerHTML = '<span class="off">Test NOT sent:</span> ' + (r.reason || 'unknown');
+      setTimeout(render, 3000);
+    }
+  );
 });
 
 // The diagnostic box is small and the interesting part is usually the markup of
@@ -159,9 +207,6 @@ $('autoclaim').addEventListener('change', async () => {
   await render();
 });
 
-$('topic').addEventListener('change', async () => {
-  await set({ topic: $('topic').value.trim() });
-});
 
 // Default the stop time to a couple of hours out, which is the typical session.
 (async () => {

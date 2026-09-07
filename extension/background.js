@@ -16,7 +16,7 @@
 // until the game started. So an alarm checks the heartbeat, reloads the armed
 // tab once to try to restart the loop, and pushes loudly if that does not take.
 
-importScripts('detect.js');
+importScripts('detect.js', 'push.js');
 
 const DEFAULT_SERVER = 'https://ntfy.sh';
 const WATCHDOG_ALARM = 'roc-watchdog';
@@ -51,20 +51,6 @@ function logLine(line) {
     await set({ log });
   }, () => {});
   return logChain;
-}
-
-// ntfy takes priority as a number 1..5, and only certain names. "urgent" is NOT
-// one of ntfy's names -- its list is max/high/default/low/min -- and an
-// unrecognised Priority is silently downgraded to default. A default-priority
-// push does not wake a phone: it lands in the app and shows no banner, which is
-// precisely the "I can see them in the app but they don't get pushed" symptom.
-// Numbers are unambiguous, so send numbers.
-function ntfyPriority(p) {
-  if (p === 'urgent' || p === 'max' || p === 5) return '5';
-  if (p === 'high' || p === 4) return '4';
-  if (p === 'low' || p === 2) return '2';
-  if (p === 'min' || p === 1) return '1';
-  return '3';
 }
 
 // Notification ids -> where clicking should take you. Kept in memory only; a
@@ -108,35 +94,35 @@ chrome.notifications.onButtonClicked.addListener((id) => openTarget(id));
 chrome.notifications.onClosed.addListener((id) => clickTargets.delete(id));
 
 async function notify(msg) {
-  const { topic, server } = await get(['topic', 'server']);
-  const base = server || DEFAULT_SERVER;
+  const cfg = await get(['provider', 'topic', 'server', 'tgToken', 'tgChat', 'discordUrl']);
+  const provider = cfg.provider || 'ntfy';
+  const creds = {
+    topic: cfg.topic,
+    server: cfg.server,
+    token: cfg.tgToken,
+    chatId: cfg.tgChat,
+    webhook: cfg.discordUrl,
+  };
 
   // Always show something locally, so a missing or wrong topic never means
   // silence on a page you are actively watching.
   showDesktop(msg);
 
-  if (!topic) {
-    await logLine('no ntfy topic set -- phone was not pushed: ' + msg.title);
-    return { pushed: false, reason: 'no topic' };
+  const req = ROCPush.build(provider, creds, msg);
+  if (!req.ok) {
+    await logLine('not configured -- phone was not pushed: ' + msg.title + ' (' + req.reason + ')');
+    return { pushed: false, reason: req.reason };
   }
 
   try {
-    const res = await fetch(base + '/' + encodeURIComponent(topic), {
-      method: 'POST',
-      headers: Object.assign(
-        {
-          Title: msg.title || 'ROC Claim Watcher',
-          Priority: ntfyPriority(msg.priority),
-          Tags: 'ticket',
-        },
-        // Makes the notification tappable straight through to the page. Worth
-        // seconds when a seat is held for ten minutes.
-        msg.click ? { Click: msg.click } : {}
-      ),
-      body: msg.message || '',
-    });
-    await logLine((res.ok ? 'pushed: ' : 'push failed (' + res.status + '): ') + msg.title);
-    return { pushed: res.ok, status: res.status };
+    const res = await fetch(req.url, req.options);
+    const body = await res.text().catch(() => '');
+    const verdict = ROCPush.accepted(provider, res.status, body);
+    await logLine(
+      (verdict.ok ? 'pushed via ' + req.provider + ': ' : 'push FAILED via ' + req.provider + ' (' + verdict.reason + '): ') +
+        msg.title
+    );
+    return { pushed: verdict.ok, reason: verdict.reason };
   } catch (err) {
     await logLine('push error: ' + err.message);
     return { pushed: false, reason: err.message };
