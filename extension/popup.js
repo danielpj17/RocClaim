@@ -15,10 +15,11 @@ function localInputValue(d) {
 async function render() {
   const st = await get([
     'enabled', 'targetUrl', 'stopAt', 'polls', 'lastCheck',
-    'stoppedReason', 'stoppedAt', 'topic', 'log', 'lastResult', 'nextPollAt', 'lastSnapshot',
+    'stoppedReason', 'stoppedAt', 'topic', 'log', 'autoClaim', 'claimResult', 'lastResult', 'nextPollAt', 'lastSnapshot',
   ]);
 
   if (st.topic && !$('topic').value) $('topic').value = st.topic;
+  $('autoclaim').checked = !!st.autoClaim;
   if (st.stopAt && !$('stop-at').value) $('stop-at').value = localInputValue(new Date(Number(st.stopAt)));
 
   const bits = [];
@@ -39,6 +40,13 @@ async function render() {
     if (st.stoppedReason) bits.push(`${st.stoppedReason} (${fmt(st.stoppedAt)})`);
     if (st.lastResult) bits.push(`last answer: <b>${String(st.lastResult).slice(0, 60)}</b>`);
     if (st.polls) bits.push(`${st.polls} checks total`);
+  }
+  if (st.claimResult) {
+    bits.push(
+      st.claimResult === 'claimed'
+        ? '<span class="on">TICKET CLAIMED</span>'
+        : '<span class="off">auto-claim did not finish: ' + st.claimResult + '</span>'
+    );
   }
   $('status').innerHTML = bits.join('<br>');
 
@@ -144,6 +152,11 @@ $('copydiag').addEventListener('click', async () => {
     $('copydiag').textContent = 'Clipboard blocked — select the text below';
   }
   setTimeout(() => ($('copydiag').textContent = 'Copy diagnostics'), 4000);
+});
+
+$('autoclaim').addEventListener('change', async () => {
+  await set({ autoClaim: $('autoclaim').checked });
+  await render();
 });
 
 $('topic').addEventListener('change', async () => {

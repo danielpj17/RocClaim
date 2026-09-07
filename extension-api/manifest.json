@@ -23,6 +23,18 @@
         "content.js"
       ],
       "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "https://byutickets.evenue.net/cart*",
+        "https://byutickets.evenue.net/checkout*",
+        "https://byutickets.evenue.net/order/*"
+      ],
+      "js": [
+        "close-cart.js",
+        "cart.js"
+      ],
+      "run_at": "document_idle"
     }
   ],
   "background": {

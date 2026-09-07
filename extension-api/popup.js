@@ -16,10 +16,11 @@ async function render() {
   const st = await get([
     'enabled', 'targetUrl', 'eventTitle', 'seasonCode', 'itemCode', 'authz',
     'stopAt', 'polls', 'lastCheck', 'lastResult', 'lastDetail', 'nextPollAt',
-    'stoppedReason', 'stoppedAt', 'topic', 'log', 'criteria', 'cartId',
+    'stoppedReason', 'stoppedAt', 'topic', 'log', 'autoClaim', 'claimResult', 'criteria', 'cartId',
   ]);
 
   if (st.topic && !$('topic').value) $('topic').value = st.topic;
+  $('autoclaim').checked = !!st.autoClaim;
   if (st.stopAt && !$('stop-at').value) $('stop-at').value = localInputValue(new Date(Number(st.stopAt)));
 
   const bits = [];
@@ -46,6 +47,13 @@ async function render() {
     if (st.cartId) bits.push('<b>a seat is in your cart</b>');
     if (st.lastResult) bits.push(`last answer: <b>${String(st.lastResult).slice(0, 70)}</b>`);
     if (st.polls) bits.push(`${st.polls} searches total`);
+  }
+  if (st.claimResult) {
+    bits.push(
+      st.claimResult === 'claimed'
+        ? '<span class="on">TICKET CLAIMED</span>'
+        : '<span class="off">auto-claim did not finish: ' + st.claimResult + '</span>'
+    );
   }
   $('status').innerHTML = bits.join('<br>');
 
@@ -122,6 +130,11 @@ $('test').addEventListener('click', async () => {
     () => void chrome.runtime.lastError
   );
   setTimeout(render, 800);
+});
+
+$('autoclaim').addEventListener('change', async () => {
+  await set({ autoClaim: $('autoclaim').checked });
+  await render();
 });
 
 $('topic').addEventListener('change', async () => {

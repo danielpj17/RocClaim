@@ -415,6 +415,64 @@ is the one to trust.
 
 ---
 
+## 0.10. Auto-claim (built 2026-09-06, at Daniel's request)
+
+He asked for it and gave his reasoning: he only arms it for a game he actually
+wants, and a ticket can be returned if plans change. That is his call, and
+section 5's hard stop still applies underneath it.
+
+**It is DOM automation, not an API call, and that is forced.** The
+`checkout_cart` mutation needs `fpPayload` — 39KB, containing `ia.dpl.payload`,
+an encoded device fingerprint produced by a third-party fraud SDK inside the
+page. It cannot be reconstructed from an extension, and forging one is a
+categorically worse act than pressing the button a human would press. So the
+page generates it, and `close-cart.js` clicks the page's own controls. A test
+asserts neither auto-claim file so much as mentions `checkout_cart` or
+`fpPayload`.
+
+```
+close-cart.js   the walker: where am I, is it free, what do I click next
+cart.js         the driver: runs on /cart, /checkout, /order. Decides whether
+                this claim is ours to finish, and reports what happened
+```
+
+Both are **byte-identical copies in `extension/` and `extension-api/`**, with a
+test asserting they have not drifted. Two divergent copies of the code that
+spends a ticket is the worst thing in this repo to let rot.
+
+**The design that makes it safe to ship before the cart DOM was ever
+captured:** every failure path falls back to exactly the notify-only behaviour,
+with the seat still held for ten minutes. Auto-claim is a best-effort layer on
+top of a working notifier, never a replacement for it. If the forward control
+is not found, if the page does not move, if a fee appears, if a card field
+appears — it stops, pushes urgently, and attaches a diagnostic snapshot of every
+control it could see, so the selectors get fixed from real markup rather than a
+second guess.
+
+Four rules, in the order they matter:
+
+1. **Falls back to notify.** Anything unexpected hands back to Daniel.
+2. **Free only, re-checked on the live page before every click.** A fee
+   appearing at the last step aborts partway rather than paying it.
+3. **Refuses anything that looks like paying.** A card field, a password field
+   or a non-zero amount stops it dead — a free ticket never needs a card.
+4. **One attempt per reservation**, guarded by `seatFoundAt` / `claimAttemptAt`.
+   A retry loop on a checkout is how you end up with two tickets.
+
+**It cannot fire by accident.** The cart script does nothing unless `autoClaim`
+is explicitly on AND `seatFoundAt` was stamped by one of our own searches within
+the last twelve minutes. Browsing to the cart page by hand while armed does
+nothing at all.
+
+**Still unverified:** the forward-control selectors are guessed — the cart DOM
+has never been captured, because `/cart` is a client-side route and so never
+appears as a document in a HAR. The next time a watch reserves a seat, dump the
+cart page before finishing by hand; that turns the guess into a fact. Until
+then expect `handover` rather than `claimed`, which is the same outcome the
+notify-only build gave.
+
+---
+
 ## 1. What this is
 
 A watcher that monitors the BYU ROC **last-chance / returned-ticket** claim and
@@ -597,7 +655,7 @@ logs/          git-ignored: server/tunnel/recon output, pids, tunnel.url
 - [x] Rebuild detection as a probe loop — `extension/probe-dom.js`, section 0.6
 - [x] Capture the seat-search XHR — done, section 0.8
 - [x] API detector — `extension-api/`, section 0.9
-- [ ] Auto-click — blocked on knowing what a successful seat search shows.
+- [x] Auto-claim — close-cart.js + cart.js, section 0.10
 
 `npm install` and `npx playwright install chromium` have both been run on this
 machine. `npm test` passes (81 tests, 26 of them driving real headless
@@ -1017,7 +1075,7 @@ countdown is not a change, "COMING SOON" becoming "Buy" *is*, and
 
 ## 13. Test suite
 
-**156 tests, all passing** (`npm test`), 49 of them driving real headless
+**172 tests, all passing** (`npm test`), 49 of them driving real headless
 Chromium against real DOM.
 
 - `test/watcher.test.js` — 16, fake clock, no network

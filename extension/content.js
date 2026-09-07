@@ -69,7 +69,9 @@ async function runProbe(st, polls) {
     // Stop immediately. The page is left exactly as the search left it, so he
     // takes over from wherever it got to -- this never clicks past the search.
     await stop('the seat search found something');
-    await set({ lastResult: 'SEATS FOUND', lastResultAt: Date.now() });
+    // seatFoundAt is what authorises the cart page to finish the claim. Without
+    // it, opening /cart by hand while auto-claim is armed would place an order.
+    await set({ lastResult: 'SEATS FOUND', lastResultAt: Date.now(), seatFoundAt: Date.now(), claimResult: null });
     await send({
       type: 'notify',
       title: 'ROC SEAT FOUND -- GO NOW',

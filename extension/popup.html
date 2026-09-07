@@ -87,6 +87,16 @@
     <input id="stop-at" type="datetime-local" />
     <div class="hint">Hard stop. Don't leave it running past when you'd actually go.</div>
 
+    <label style="display:flex;align-items:center;gap:8px;margin-top:14px;font-weight:600;font-size:12px">
+      <input type="checkbox" id="autoclaim" style="width:auto;margin:0" />
+      Auto-claim: finish the checkout for me
+    </label>
+    <div class="hint" id="autoclaim-hint">
+      Off: you get a push and the seat is held ~10 min. On: it walks the cart
+      through and places the order. Only turn this on for a game you actually
+      want — and if your plans change, return the ticket.
+    </div>
+
     <div class="row">
       <button id="start">Watch this tab</button>
       <button id="stop">Stop</button>

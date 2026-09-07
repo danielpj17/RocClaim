@@ -219,13 +219,33 @@ async function runPoll() {
 
   if (verdict.state === 'available') {
     await stopWatch('a seat was reserved');
-    await set({ lastResult: 'SEAT RESERVED', cartId: verdict.cartId, unknownStreak: 0 });
+    await set({
+      lastResult: 'SEAT RESERVED',
+      cartId: verdict.cartId,
+      unknownStreak: 0,
+      // Authorises the cart page to finish the claim, and only for a while.
+      seatFoundAt: Date.now(),
+      claimResult: null,
+      claimAttemptAt: null,
+    });
+
+    // This extension has no page of its own, so auto-claim needs one opened.
+    // The cart content script does the rest -- and does nothing at all unless
+    // autoClaim is armed and seatFoundAt is recent.
+    const { autoClaim } = await get(['autoClaim']);
+    if (autoClaim) {
+      try {
+        await chrome.tabs.create({ url: ROCApi.ORIGIN + '/cart', active: true });
+        await logLine('auto-claim armed: opened the cart to finish the checkout');
+      } catch (err) {
+        await logLine('could not open the cart tab: ' + err.message);
+      }
+    }
     await notify({
       title: 'ROC SEAT RESERVED -- 10 MINUTES',
       message:
         'A seat came back on check ' + polls + ' and is now held in your cart.\n\n' +
-        'The hold lasts about ten minutes. Go finish the checkout yourself -- ' +
-        'nothing past the search was sent.\n' +
+        'The hold lasts about ten minutes.\n' +
         ROCApi.ORIGIN + '/cart',
       priority: 'urgent',
       click: ROCApi.ORIGIN + '/cart',

@@ -186,9 +186,18 @@ test('no shipped code can send a checkout', () => {
   const path = require('node:path');
   const strip = (s) => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
 
-  for (const f of ['api.js', 'background.js', 'content.js', 'popup.js']) {
+  for (const f of ['api.js', 'background.js', 'content.js', 'popup.js', 'close-cart.js', 'cart.js']) {
     const code = strip(fs.readFileSync(path.join(__dirname, '..', 'extension-api', f), 'utf8'));
     assert.equal(/checkout_cart/.test(code), false, f + ' must not call the checkout mutation');
+  }
+
+  // Auto-claim finishes a purchase, but it does it by clicking the page's own
+  // controls so the page generates its own fpPayload. Sending the mutation
+  // directly would mean forging a device fingerprint, which is a different and
+  // much worse thing than pressing the button a human would press.
+  for (const f of ['close-cart.js', 'cart.js']) {
+    const code = strip(fs.readFileSync(path.join(__dirname, '..', 'extension', f), 'utf8'));
+    assert.equal(/checkout_cart|fpPayload/.test(code), false, f + ' must click, not forge a checkout');
   }
 });
 
