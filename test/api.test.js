@@ -234,3 +234,33 @@ test('the notifier never sends a priority name ntfy does not know', () => {
     assert.ok(bg.includes('ROCPush.build('), dir + ' must route through the shared notifier');
   }
 });
+
+test('the DOM extension ships the same api.js as the API extension', () => {
+  // The DOM probe now uses it for the server-side price gate. Two divergent
+  // copies of the protocol would be a slow, quiet disaster.
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const a = fs.readFileSync(path.join(__dirname, '..', 'extension', 'api.js'), 'utf8');
+  const b = fs.readFileSync(path.join(__dirname, '..', 'extension-api', 'api.js'), 'utf8');
+  assert.equal(a, b, 'api.js has drifted between the two extensions');
+});
+
+test('the observer only reads -- it never alters a request', () => {
+  // observe.js runs in the PAGE's world, which is the most powerful position in
+  // this codebase. It wraps fetch and XHR to copy responses out. If it ever
+  // gains the ability to change, replay or forge one, that is a different
+  // program with a different risk profile.
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const src = fs.readFileSync(path.join(__dirname, '..', 'extension', 'observe.js'), 'utf8')
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/^\s*\/\/.*$/gm, '');
+
+  // It must pass the caller's own arguments straight through, untouched.
+  assert.match(src, /origFetch\.apply\(this, arguments\)/, 'fetch must be forwarded unmodified');
+  assert.match(src, /OrigSend\.apply\(this, arguments\)/, 'send must be forwarded unmodified');
+  // And it must never originate traffic of its own.
+  assert.equal(/fetch\(\s*['"`]http/.test(src), false, 'the observer must not make its own requests');
+  assert.equal(/XMLHttpRequest\(\)/.test(src), false, 'the observer must not open its own XHR');
+  assert.equal(/checkout_cart|delete_cart/.test(src), false, 'the observer must not know about mutations');
+});

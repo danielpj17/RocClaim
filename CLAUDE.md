@@ -546,6 +546,63 @@ ten-minute hold.
 
 ---
 
+## 0.12. The DOM probe, refined by the HAR (2026-09-07)
+
+The API capture (0.8) turned out to improve the DOM probe more than it justified
+replacing it — especially once 0.9's postscript established that the API watcher
+is the one more exposed to a PerimeterX 403. Two refinements, both keeping the
+probe's shape: it still drives the real page, where Paciolan's own PerimeterX
+client handles a challenge the way it does for a human.
+
+### A. The free-ticket gate reads server numbers, not rendered text
+
+`discovery_eventDetailMPT` returns `PRICE`, `FACILITY_FEE` and `PER_TICKET_FEE`
+as actual numbers. The content script calls it once per watch — same origin, the
+page's own cookies, `pac-authz` straight out of the page HTML — so it is the
+app's own call made from the app's own context, not a new kind of traffic.
+
+Confirmed-free skips the text scrape entirely. **Not confirmed falls back to
+scraping exactly as before**: an unreachable API is not evidence either way, and
+this refines the gate rather than becoming a new way to fail. A server answer of
+*not* free stops the watch before anything is clicked, which is stronger than
+the page scrape could ever be.
+
+It also removes the confusing "no price evidence yet, retry" state that cost a
+round of live debugging.
+
+### B. `observe.js` reads what the server actually said
+
+The probe used to infer "seat found" from the page: URL changed, cart wording
+appeared, DOM settled into something different. That is inference, and it fired
+a live `SEAT FOUND -- GO NOW` at 11pm on a loading spinner. The truth is one
+layer down and unambiguous: `cart_addCart` returns a `cartId` or it does not.
+
+`observe.js` runs in the **page's world** — the only file here that does — and
+wraps `fetch` and `XMLHttpRequest` to copy out the seat-search response, posting
+it back to the content script. `classifyOutcome` now takes that observation and
+lets it outrank every page heuristic; the heuristics stay underneath for when
+the observer does not load or the app changes how it calls the API.
+
+**The boundary, and it is the reason this is acceptable at all: it only reads.**
+It forwards the caller's own arguments untouched (`apply(this, arguments)`),
+clones responses so the app still reads its own body, never originates a request,
+and does not know the checkout or delete mutations exist. A test strips comments
+and asserts every one of those. If it ever gains the ability to modify, replay or
+forge a request, that is a different program with a different risk profile and
+this section no longer applies to it.
+
+A side benefit worth having: the raw answer is stored in `lastRawAnswer`, so the
+**no-seats response shape — never captured by anything in this project — will be
+recorded the first time a watch runs and finds nothing.**
+
+### What this does not change
+
+The probe still clicks to ask, never to claim. It still touches three allowlisted
+controls. A found seat still stops the watch. `api.js` is now byte-identical in
+both extensions with a drift test, alongside `push.js` and `close-cart.js`.
+
+---
+
 ## 1. What this is
 
 A watcher that monitors the BYU ROC **last-chance / returned-ticket** claim and
@@ -1148,7 +1205,7 @@ countdown is not a change, "COMING SOON" becoming "Buy" *is*, and
 
 ## 13. Test suite
 
-**182 tests, all passing** (`npm test`), 49 of them driving real headless
+**193 tests, all passing** (`npm test`), 49 of them driving real headless
 Chromium against real DOM.
 
 - `test/watcher.test.js` — 16, fake clock, no network

@@ -214,6 +214,7 @@ async function probe(html, opts = {}) {
       fingerprint: (s) => String(s).replace(/\s+/g, ' ').trim(),
       waitMs: 2500,
       readyMs: o.readyMs || 6000,
+      freeConfirmed: !!o.freeConfirmed,
     })
   , opts);
   const clicks = await p.evaluate(() => window.__clicks);
@@ -341,7 +342,7 @@ function livePage(opts = {}) {
       <p>Must be a minimum of 1, up to 1</p>
       <div><div data-testid="QtyPanelNewLayout" id="qtypanel"></div></div>
     </section>
-    <div>$0.00</div>
+    ${opts.noPrice ? '' : '<div>$0.00</div>'}
     <button data-testid="add-to-cart-btn" disabled tabindex="0" id="primary">No Tickets Selected</button>
   </div>
   <a href="/myaccount/sitesecurity">Site Security</a>
@@ -566,4 +567,61 @@ test('a search button that does nothing reports unknown, not "no seats"', async 
   // A dead selector must never look like a successful poll.
   const { result } = await probe(fixture({ deadSearch: true }));
   assert.equal(result.state, 'unknown');
+});
+
+// --- refinement B: the server's answer outranks the page --------------------
+
+test('an observed cart id beats every page heuristic', () => {
+  // The whole point of observe.js. cart_addCart either returned a cartId or it
+  // did not; a spinner, a repaint or a stale modal cannot change that.
+  const v = P.classifyOutcome({
+    text: 'Seats Not Found',          // a stale modal still on screen
+    urlChanged: false,
+    fingerprintChanged: false,
+    observed: { state: 'available', cartId: '789_X', detail: 'the server returned a cart id' },
+  });
+  assert.equal(v.state, 'available');
+  assert.equal(v.cartId, '789_X');
+});
+
+test('an observed empty answer is a definite no, not a guess', () => {
+  const v = P.classifyOutcome({
+    text: 'Select Your Tickets Searching...',
+    fingerprintChanged: true,
+    settled: true,                     // would otherwise have read as available
+    observed: { state: 'unavailable', detail: 'the server returned no cart' },
+  });
+  assert.equal(v.state, 'unavailable');
+});
+
+test('with no observation the page heuristics still decide', () => {
+  // observe.js can fail to load, or the app can change how it calls the API.
+  // The old path has to keep working underneath.
+  assert.equal(
+    P.classifyOutcome({ text: 'Seats Not Found', observed: null }).state,
+    'unavailable'
+  );
+  assert.equal(
+    P.classifyOutcome({ text: 'x', url: 'https://byutickets.evenue.net/cart', observed: null }).state,
+    'available'
+  );
+  assert.equal(
+    P.classifyOutcome({ text: 'x', fingerprintChanged: true, settled: false, observed: null }).state,
+    'unknown'
+  );
+});
+
+test('LIVE: a confirmed-free price skips the page scrape entirely', async () => {
+  // Refinement A: server numbers are better evidence than a rendered string, so
+  // a page with no visible price must still proceed when the API confirmed it.
+  const { result, clicks } = await probe(livePage({ noPrice: true }), { freeConfirmed: true });
+  assert.equal(result.state, 'unavailable', JSON.stringify(result).slice(0, 200));
+  assert.ok(clicks.includes('qtyButtonPlus-0'), JSON.stringify(clicks));
+});
+
+test('LIVE: without confirmation a page with no price still refuses to search', async () => {
+  // And the fallback keeps its teeth: absence of a price is not evidence of free.
+  const { result, clicks } = await probe(livePage({ noPrice: true }));
+  assert.notEqual(result.state, 'unavailable');
+  assert.ok(!clicks.includes('primary'), 'must not run the search: ' + JSON.stringify(clicks));
 });

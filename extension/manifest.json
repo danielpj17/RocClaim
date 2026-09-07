@@ -22,6 +22,7 @@
         "https://byutickets.evenue.net/*"
       ],
       "js": [
+        "api.js",
         "detect.js",
         "probe-dom.js",
         "content.js"
@@ -39,6 +40,16 @@
         "cart.js"
       ],
       "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "https://byutickets.evenue.net/*"
+      ],
+      "js": [
+        "observe.js"
+      ],
+      "world": "MAIN",
+      "run_at": "document_start"
     }
   ],
   "background": {

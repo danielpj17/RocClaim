@@ -21,6 +21,40 @@
 // watchdog reports a perfectly healthy loop.
 const MAX_UNKNOWN_STREAK = 5;
 
+// --- what the server actually said ------------------------------------------
+//
+// observe.js runs in the page's world and posts the seat-search response here.
+// This is strictly better evidence than anything the page looks like, and it is
+// what stops a loading spinner reading as a found seat.
+const observations = [];
+window.addEventListener('message', (e) => {
+  // Same page only, and only our marker. Anything else on this bus is not ours.
+  if (e.source !== window) return;
+  const d = e.data;
+  if (!d || d.source !== 'roc-observe') return;
+  observations.push(d);
+  while (observations.length > 10) observations.shift();
+});
+
+// The most recent answer that arrived AFTER a given moment. Anything older
+// belongs to a previous cycle and must not be mistaken for this one's.
+function observedSince(t) {
+  for (let i = observations.length - 1; i >= 0; i--) {
+    const o = observations[i];
+    if (o.at >= t && o.verdict) return o.verdict;
+  }
+  return null;
+}
+
+function rawSince(t) {
+  for (let i = observations.length - 1; i >= 0; i--) {
+    if (observations[i].at >= t) return observations[i].raw;
+  }
+  return null;
+}
+
+
+
 const send = (msg) =>
   new Promise((resolve) => {
     try {
@@ -47,14 +81,64 @@ async function stop(reason) {
   await set({ enabled: false, stoppedReason: reason, stoppedAt: Date.now() });
 }
 
+
+// Refinement A: the free-ticket gate, from server-side numbers rather than a
+// rendered "$0.00". discovery_eventDetailMPT returns PRICE, FACILITY_FEE and
+// PER_TICKET_FEE as actual numbers (CLAUDE.md 0.8). Same origin, the page's own
+// cookies, and the token is in the page HTML -- so this is the app's own call,
+// made from the app's own context.
+//
+// Cached for the watch: price levels are event configuration, not availability.
+// If it cannot be done, the probe falls back to scraping the page exactly as
+// before -- this refines the gate, it does not become a new way to fail.
+async function confirmFreeViaApi(st) {
+  if (st.freeConfirmed === true) return true;
+  if (st.freeConfirmed === false) return false;
+  try {
+    const where = ROCApi.parseEventUrl(location.href);
+    const authz = ROCApi.extractAuthz(document.documentElement.innerHTML);
+    if (!where || !authz) return null;
+
+    const res = await fetch(ROCApi.ORIGIN + ROCApi.GQL_PATH, {
+      method: 'POST',
+      credentials: 'include',
+      headers: ROCApi.headers(authz),
+      body: JSON.stringify(ROCApi.eventDetailBody(where.seasonCode, where.itemCode)),
+    });
+    if (!res.ok) return null;
+    const gate = ROCApi.priceGate(ROCApi.readEventDetail(await res.json()));
+    await set({ freeConfirmed: gate.ok, freeReason: gate.ok ? 'server says free' : gate.reason });
+    return gate.ok;
+  } catch {
+    return null; // unreachable API is not evidence either way
+  }
+}
+
 // One probe cycle, plus what each answer means. Kept out of main() so the
 // strategy reads as one unit.
 async function runProbe(st, polls) {
   const D = ROCDetect;
   const fp = (s) => D.hash(D.normalize(s));
 
+  const free = await confirmFreeViaApi(st);
+  if (free === false) {
+    // The server says this event is not free. Stop before touching anything --
+    // stronger evidence than the page scrape could ever be.
+    await stop('the price levels are not free');
+    await send({
+      type: 'notify',
+      title: 'ROC watch STOPPED -- not a free claim',
+      message: 'The event price levels came back non-zero, so nothing was clicked.\n' + location.href,
+      priority: 'high',
+    });
+    return;
+  }
+
+  const startedAt = Date.now();
   const result = await ROCProbeDom.runCycle({
     fingerprint: fp,
+    freeConfirmed: free === true,
+    observed: (since) => observedSince(since || startedAt),
     log: (line) => void line,
   });
 
@@ -116,6 +200,8 @@ async function runProbe(st, polls) {
     // What the page actually looked like. Without this, diagnosing a blind
     // probe means guessing at selectors a second time.
     lastSnapshot: result.snapshot || null,
+    // Very probably the no-seats response, which has never been captured.
+    lastRawAnswer: rawSince(startedAt) || null,
   });
 
   if (streak >= MAX_UNKNOWN_STREAK) {

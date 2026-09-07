@@ -355,7 +355,17 @@ var ROCProbeDom = (function () {
   // real claim produces, or cart wording on the page. A settled, unexplained
   // change is reported only after the page has stopped moving, and only once
   // the modal has definitively not appeared.
-  function classifyOutcome({ text, url, urlChanged, fingerprintChanged, settled }) {
+  function classifyOutcome({ text, url, urlChanged, fingerprintChanged, settled, observed }) {
+    // The server's own answer outranks anything the page might look like. This
+    // is the whole point of observe.js: cart_addCart either returned a cartId
+    // or it did not, and no amount of spinner or repaint changes that.
+    if (observed && observed.state === 'available') {
+      return { state: 'available', detail: observed.detail || 'the server returned a cart id', cartId: observed.cartId };
+    }
+    if (observed && observed.state === 'unavailable') {
+      return { state: 'unavailable', detail: observed.detail || 'the server returned no cart' };
+    }
+
     if (SELECTORS.seatsNotFound.test(text || '')) {
       return { state: 'unavailable', detail: 'the site reported no seats' };
     }
@@ -441,7 +451,11 @@ var ROCProbeDom = (function () {
     // and it should stop us before we touch anything at all. The *absence* of a
     // price is not checked here: on this page the amount can render after a
     // quantity is chosen, so demanding it up front deadlocks the cycle.
-    let price = priceVerdict(bodyText());
+    // Refinement A: when the price levels have been confirmed free by the API
+    // (server-side numbers, not a rendered string), that is strictly better
+    // evidence than scraping the page and the scrape is skipped. The text gate
+    // remains the fallback for when the API call could not be made.
+    let price = opts.freeConfirmed ? { ok: true, found: [], max: 0 } : priceVerdict(bodyText());
     if (!price.ok && price.kind === 'nonZero') {
       return {
         state: 'refused',
@@ -544,7 +558,7 @@ var ROCProbeDom = (function () {
     // Re-read against the live page, now that a quantity is set and the amount
     // has had a chance to appear.
     const priceBy = Date.now() + (opts.priceMs || 5000);
-    price = priceVerdict(bodyText());
+    price = opts.freeConfirmed ? { ok: true, found: [], max: 0 } : priceVerdict(bodyText());
     while (!price.ok && price.kind === 'noEvidence' && Date.now() < priceBy) {
       await sleep(200);
       price = priceVerdict(bodyText());
@@ -576,6 +590,7 @@ var ROCProbeDom = (function () {
     const beforeUrl = location.href;
     const beforeFp = fingerprint(bodyText());
 
+    const clickedAt = Date.now();
     search.click();
     clicked.push(label);
     log('ran the seat search');
@@ -595,6 +610,8 @@ var ROCProbeDom = (function () {
         stableSince = Date.now();   // still moving; a spinner is not an answer
       }
       outcome = classifyOutcome({
+        // Only an answer that arrived AFTER the click can be about this click.
+        observed: typeof opts.observed === 'function' ? opts.observed(clickedAt) : null,
         text,
         url: location.href,
         urlChanged: location.href !== beforeUrl,
