@@ -67,23 +67,53 @@ function ntfyPriority(p) {
   return '3';
 }
 
+// Notification ids -> where clicking should take you. Kept in memory only; a
+// worker restart losing them costs a click target, nothing more.
+const clickTargets = new Map();
+
+function showDesktop(msg) {
+  const loud = msg.priority === 'urgent' || msg.priority === 'high';
+  const id = 'roc-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8);
+  try {
+    chrome.notifications.create(id, {
+      type: 'basic',
+      iconUrl: 'icon128.png',
+      title: msg.title || 'ROC Claim Watcher',
+      message: (msg.message || '').slice(0, 300),
+      priority: loud ? 2 : 0,
+      // Urgent means a seat is on a ten-minute clock. A toast that fades after
+      // five seconds is no use if you looked away.
+      requireInteraction: loud,
+      buttons: msg.click ? [{ title: 'Open it' }] : undefined,
+    });
+    if (msg.click) clickTargets.set(id, msg.click);
+  } catch {
+    // Desktop notification is a convenience; the push is the point.
+  }
+}
+
+function openTarget(id) {
+  const url = clickTargets.get(id);
+  if (url) {
+    chrome.tabs.create({ url, active: true });
+    clickTargets.delete(id);
+  }
+  try {
+    chrome.notifications.clear(id);
+  } catch {}
+}
+
+chrome.notifications.onClicked.addListener(openTarget);
+chrome.notifications.onButtonClicked.addListener((id) => openTarget(id));
+chrome.notifications.onClosed.addListener((id) => clickTargets.delete(id));
+
 async function notify(msg) {
   const { topic, server } = await get(['topic', 'server']);
   const base = server || DEFAULT_SERVER;
 
   // Always show something locally, so a missing or wrong topic never means
   // silence on a page you are actively watching.
-  try {
-    chrome.notifications.create({
-      type: 'basic',
-      iconUrl: 'icon128.png',
-      title: msg.title || 'ROC Claim Watcher',
-      message: (msg.message || '').slice(0, 300),
-      priority: msg.priority === 'urgent' || msg.priority === 'high' ? 2 : 0,
-    });
-  } catch {
-    // Desktop notifications are a convenience; the push below is the point.
-  }
+  showDesktop(msg);
 
   if (!topic) {
     await logLine('no ntfy topic set -- phone was not pushed: ' + msg.title);

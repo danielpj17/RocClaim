@@ -63,20 +63,50 @@ function ntfyPriority(p) {
   return '3';
 }
 
-async function notify(msg) {
-  const { topic, server } = await get(['topic', 'server']);
-  const base = server || DEFAULT_SERVER;
+// Notification ids -> where clicking should take you. Kept in memory only; a
+// worker restart losing them costs a click target, nothing more.
+const clickTargets = new Map();
+
+function showDesktop(msg) {
+  const loud = msg.priority === 'urgent' || msg.priority === 'high';
+  const id = 'roc-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8);
   try {
-    chrome.notifications.create({
+    chrome.notifications.create(id, {
       type: 'basic',
       iconUrl: 'icon128.png',
       title: msg.title || 'ROC API Watcher',
       message: (msg.message || '').slice(0, 300),
-      priority: msg.priority === 'urgent' || msg.priority === 'high' ? 2 : 0,
+      priority: loud ? 2 : 0,
+      // Urgent means a seat is on a ten-minute clock. A toast that fades after
+      // five seconds is no use if you looked away.
+      requireInteraction: loud,
+      buttons: msg.click ? [{ title: 'Open it' }] : undefined,
     });
+    if (msg.click) clickTargets.set(id, msg.click);
   } catch {
     // Desktop notification is a convenience; the push is the point.
   }
+}
+
+function openTarget(id) {
+  const url = clickTargets.get(id);
+  if (url) {
+    chrome.tabs.create({ url, active: true });
+    clickTargets.delete(id);
+  }
+  try {
+    chrome.notifications.clear(id);
+  } catch {}
+}
+
+chrome.notifications.onClicked.addListener(openTarget);
+chrome.notifications.onButtonClicked.addListener((id) => openTarget(id));
+chrome.notifications.onClosed.addListener((id) => clickTargets.delete(id));
+
+async function notify(msg) {
+  const { topic, server } = await get(['topic', 'server']);
+  const base = server || DEFAULT_SERVER;
+  showDesktop(msg);
   if (!topic) {
     await logLine('no ntfy topic set -- phone was not pushed: ' + msg.title);
     return { pushed: false };
