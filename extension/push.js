@@ -121,8 +121,39 @@ var ROCPush = (function () {
     return String(s == null ? '' : s).replace(/([_*\[\]()~`>#+\-=|{}.!\\])/g, '\\$1');
   }
 
+  // --- Telegram chat-id discovery ------------------------------------------
+  //
+  // The chat id is the fiddly half of Telegram setup: it is a bare number with
+  // no obvious way to find it, and the usual instructions send you to a raw
+  // JSON URL to eyeball. Telegram hands it over for free in getUpdates once you
+  // have messaged the bot, so the extension asks for it rather than making a
+  // human read JSON.
+  function telegramUpdatesUrl(token) {
+    return 'https://api.telegram.org/bot' + String(token || '').trim() + '/getUpdates';
+  }
+
+  // The most recent chat that has spoken to this bot. Newest first, because a
+  // bot re-used across chats should settle on the one just used.
+  function readChatId(json) {
+    const results = (json && json.result) || [];
+    for (let i = results.length - 1; i >= 0; i--) {
+      const u = results[i] || {};
+      const m = u.message || u.edited_message || u.channel_post || u.my_chat_member;
+      if (m && m.chat && m.chat.id != null) {
+        return { ok: true, chatId: String(m.chat.id), name: (m.chat.first_name || m.chat.title || '') };
+      }
+    }
+    if (json && json.ok === false) {
+      return { ok: false, reason: json.description || 'Telegram refused the token' };
+    }
+    // A valid token with no messages: the bot exists but has never been spoken
+    // to, which is the single most common setup mistake -- a bot cannot message
+    // you first.
+    return { ok: false, reason: 'no messages yet -- open your bot in Telegram and send it anything, then try again' };
+  }
+
   function build(provider, creds, msg) {
-    const p = PROVIDERS[provider] || PROVIDERS.ntfy;
+    const p = PROVIDERS[provider] || PROVIDERS.telegram;
     const c = creds || {};
     if (!p.ready(c)) return { ok: false, reason: p.label + ' is not configured' };
     const req = p.build(c, msg);
@@ -144,7 +175,7 @@ var ROCPush = (function () {
     return { ok: true };
   }
 
-  return { PROVIDERS, build, accepted, ntfyPriority, escapeMd };
+  return { PROVIDERS, build, accepted, ntfyPriority, escapeMd, telegramUpdatesUrl, readChatId };
 })();
 
 if (typeof globalThis !== 'undefined') globalThis.ROCPush = ROCPush;

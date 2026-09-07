@@ -87,7 +87,10 @@ async function arm(over) {
     enabled: true, targetUrl: EVENT_URL, seasonCode: 'WS26', itemCode: 'E05',
     stopAt: Date.now() + 3600_000, polls: 0, unknownStreak: 0,
     criteria: null, cartId: null, lastResult: null, stoppedReason: null,
-    lastCheck: null, armedAt: Date.now(), log: [], authz: AUTHZ, topic: 'test-topic',
+    lastCheck: null, armedAt: Date.now(), log: [], authz: AUTHZ,
+    // Pinned to ntfy because the stub intercepts by URL; the provider itself is
+    // covered in push.test.js.
+    provider: 'ntfy', topic: 'test-topic',
   }, over || {}));
 }
 

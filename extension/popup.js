@@ -18,7 +18,7 @@ async function render() {
     'stoppedReason', 'stoppedAt', 'topic', 'log', 'provider', 'tgToken', 'tgChat', 'discordUrl', 'autoClaim', 'claimResult', 'lastResult', 'nextPollAt', 'lastSnapshot',
   ]);
 
-  const provider = st.provider || 'ntfy';
+  const provider = st.provider || 'telegram';
   if (!$('provider').dataset.touched) $('provider').value = provider;
   showProviderFields($('provider').value);
   if (st.topic && !$('topic').value) $('topic').value = st.topic;
@@ -111,6 +111,30 @@ for (const id of ['topic', 'tgToken', 'tgChat', 'discordUrl']) {
   $(id).addEventListener('change', saveProvider);
   $(id).addEventListener('blur', saveProvider);
 }
+
+// The chat id is the fiddly half of Telegram setup, and every guide online tells
+// you to open a raw JSON URL and find it by eye. Telegram will just hand it over
+// once the bot has been messaged, so ask it.
+$('tgFind').addEventListener('click', async () => {
+  const token = $('tgToken').value.trim();
+  if (!token.includes(':')) {
+    $('status').innerHTML = '<span class="off">That does not look like a bot token.</span> It should read like 123456789:AAH...';
+    return;
+  }
+  await saveProvider();
+  $('tgFind').textContent = 'Looking...';
+  chrome.runtime.sendMessage({ type: 'tg-discover', token }, (r) => {
+    void chrome.runtime.lastError;
+    $('tgFind').textContent = 'Find my chat ID';
+    if (r && r.ok) {
+      $('tgChat').value = r.chatId;
+      saveProvider().then(render);
+      $('status').innerHTML = '<span class="on">Found it' + (r.name ? ' \u2014 ' + r.name : '') + '.</span> Now press Test.';
+    } else {
+      $('status').innerHTML = '<span class="off">Could not find it:</span> ' + ((r && r.reason) || 'no answer');
+    }
+  });
+});
 
 $('start').addEventListener('click', async () => {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });

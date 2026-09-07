@@ -125,3 +125,38 @@ test('every provider handles the real seat-found notification', () => {
     assert.ok(r.options.body.length > 0, prov + ' must send a body');
   }
 });
+
+// --- Telegram chat-id discovery ---------------------------------------------
+
+test('the chat id is read out of getUpdates so nobody reads raw JSON', () => {
+  const json = {
+    ok: true,
+    result: [
+      { update_id: 1, message: { chat: { id: 111, first_name: 'Old' }, text: 'hi' } },
+      { update_id: 2, message: { chat: { id: 222, first_name: 'Daniel' }, text: 'hello' } },
+    ],
+  };
+  const r = P.readChatId(json);
+  assert.equal(r.ok, true);
+  assert.equal(r.chatId, '222', 'the most recent chat wins');
+  assert.equal(r.name, 'Daniel');
+});
+
+test('a token that has never been messaged says exactly that', () => {
+  // The single most common Telegram setup mistake: a bot cannot message you
+  // first, so getUpdates is empty until you send it something. A generic
+  // "failed" here would send you hunting the wrong problem.
+  const r = P.readChatId({ ok: true, result: [] });
+  assert.equal(r.ok, false);
+  assert.match(r.reason, /send it anything/);
+});
+
+test('a bad token reports Telegram own words', () => {
+  const r = P.readChatId({ ok: false, description: 'Unauthorized' });
+  assert.equal(r.ok, false);
+  assert.match(r.reason, /Unauthorized/);
+});
+
+test('the discovery URL is built from the token', () => {
+  assert.equal(P.telegramUpdatesUrl(' 123:abc '), 'https://api.telegram.org/bot123:abc/getUpdates');
+});

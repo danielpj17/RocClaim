@@ -91,7 +91,7 @@ chrome.notifications.onClosed.addListener((id) => clickTargets.delete(id));
 
 async function notify(msg) {
   const cfg = await get(['provider', 'topic', 'server', 'tgToken', 'tgChat', 'discordUrl']);
-  const provider = cfg.provider || 'ntfy';
+  const provider = cfg.provider || 'telegram';
   const creds = {
     topic: cfg.topic,
     server: cfg.server,
@@ -382,6 +382,20 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       });
       if (changed) await logLine('session token picked up from the event page');
       sendResponse({ accepted: true });
+    })();
+    return true;
+  }
+
+  // Look up the Telegram chat id so nobody has to read raw JSON to find it.
+  if (msg.type === 'tg-discover') {
+    (async () => {
+      try {
+        const res = await fetch(ROCPush.telegramUpdatesUrl(msg.token));
+        const json = await res.json().catch(() => null);
+        sendResponse(ROCPush.readChatId(json));
+      } catch (err) {
+        sendResponse({ ok: false, reason: err.message });
+      }
     })();
     return true;
   }
