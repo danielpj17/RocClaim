@@ -27,6 +27,29 @@
 
     const st = await get(['autoClaim', 'seatFoundAt', 'claimAttemptAt', 'claimResult', 'targetUrl']);
 
+    // Record what this page looks like, ALWAYS -- armed or not, ours or not.
+    //
+    // The forward-button selectors in close-cart.js are the last guessed thing
+    // in this project. /cart is a client-side route, so it never appears as a
+    // document in a HAR and cannot be captured that way. The only chance to see
+    // it is while someone is standing on it, which is exactly the ten minutes
+    // they are least likely to stop and run a console snippet. So it captures
+    // itself instead, and the popup can hand it over later.
+    if (where === 'cart' || where === 'checkout') {
+      const readyBy = Date.now() + 8000;
+      while (Date.now() < readyBy) {
+        if (C.findForward()) break;
+        const t = document.body ? document.body.innerText : '';
+        if (C.SELECTORS.cartMarker.test(t)) break;
+        await new Promise((r) => setTimeout(r, 250));
+      }
+      await set({
+        cartSnapshot: C.snapshot(),
+        cartSnapshotAt: Date.now(),
+        cartSnapshotWhere: where,
+      });
+    }
+
     // An order page reached after our own attempt: record the win and say so.
     if (where === 'order') {
       if (st.claimAttemptAt && !st.claimResult) {

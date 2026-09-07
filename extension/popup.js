@@ -15,7 +15,7 @@ function localInputValue(d) {
 async function render() {
   const st = await get([
     'enabled', 'targetUrl', 'stopAt', 'polls', 'lastCheck',
-    'stoppedReason', 'stoppedAt', 'topic', 'log', 'provider', 'tgToken', 'tgChat', 'discordUrl', 'autoClaim', 'claimResult', 'lastResult', 'nextPollAt', 'lastSnapshot',
+    'stoppedReason', 'stoppedAt', 'topic', 'log', 'provider', 'tgToken', 'tgChat', 'discordUrl', 'cartSnapshot', 'cartSnapshotAt', 'autoClaim', 'claimResult', 'lastResult', 'nextPollAt', 'lastSnapshot',
   ]);
 
   const provider = st.provider || 'telegram';
@@ -54,11 +54,14 @@ async function render() {
         : '<span class="off">auto-claim did not finish: ' + st.claimResult + '</span>'
     );
   }
+  if (st.cartSnapshot) {
+    bits.push('<span class="muted">cart page captured ' + fmt(st.cartSnapshotAt) + ' &mdash; send it to Claude</span>');
+  }
   $('status').innerHTML = bits.join('<br>');
 
   // When the probe could not read the page, show it what it saw. This is the
   // difference between "it is broken" and "here is the selector to fix".
-  const snap = st.lastSnapshot;
+  const snap = st.lastSnapshot || st.cartSnapshot;
   const diag = $('diag');
   if (snap) {
     const rows = (snap.controls || [])
@@ -214,8 +217,18 @@ $('test').addEventListener('click', async () => {
 // The diagnostic box is small and the interesting part is usually the markup of
 // a control that has no label. One click puts the whole thing on the clipboard.
 $('copydiag').addEventListener('click', async () => {
-  const st = await get(['lastSnapshot', 'lastResult']);
-  const text = JSON.stringify({ lastResult: st.lastResult, snapshot: st.lastSnapshot }, null, 1);
+  const st = await get(['lastSnapshot', 'lastResult', 'cartSnapshot', 'cartSnapshotAt', 'claimResult', 'claimDetail']);
+  const text = JSON.stringify(
+    {
+      lastResult: st.lastResult,
+      snapshot: st.lastSnapshot,
+      claimResult: st.claimResult,
+      claimDetail: st.claimDetail,
+      cartSnapshot: st.cartSnapshot,
+    },
+    null,
+    1
+  );
   try {
     await navigator.clipboard.writeText(text);
     $('copydiag').textContent = 'Copied — paste it to Claude';

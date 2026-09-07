@@ -63,9 +63,10 @@ function showDesktop(msg) {
       title: msg.title || 'ROC API Watcher',
       message: (msg.message || '').slice(0, 300),
       priority: loud ? 2 : 0,
-      // Urgent means a seat is on a ten-minute clock. A toast that fades after
-      // five seconds is no use if you looked away.
-      requireInteraction: loud,
+      // Deliberately NOT requireInteraction. A notification that will not go
+      // away is worse than one you might miss: the phone push is the channel
+      // that matters, and a stuck Windows toast is just something to fight.
+      requireInteraction: false,
       buttons: msg.click ? [{ title: 'Open it' }] : undefined,
     });
     if (msg.click) clickTargets.set(id, msg.click);

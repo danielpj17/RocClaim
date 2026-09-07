@@ -16,7 +16,7 @@ async function render() {
   const st = await get([
     'enabled', 'targetUrl', 'eventTitle', 'seasonCode', 'itemCode', 'authz',
     'stopAt', 'polls', 'lastCheck', 'lastResult', 'lastDetail', 'nextPollAt',
-    'stoppedReason', 'stoppedAt', 'topic', 'log', 'provider', 'tgToken', 'tgChat', 'discordUrl', 'autoClaim', 'claimResult', 'criteria', 'cartId',
+    'stoppedReason', 'stoppedAt', 'topic', 'log', 'provider', 'tgToken', 'tgChat', 'discordUrl', 'cartSnapshot', 'cartSnapshotAt', 'autoClaim', 'claimResult', 'criteria', 'cartId',
   ]);
 
   const provider = st.provider || 'telegram';
@@ -60,6 +60,9 @@ async function render() {
         ? '<span class="on">TICKET CLAIMED</span>'
         : '<span class="off">auto-claim did not finish: ' + st.claimResult + '</span>'
     );
+  }
+  if (st.cartSnapshot) {
+    bits.push('<span class="muted">cart page captured ' + fmt(st.cartSnapshotAt) + ' &mdash; send it to Claude</span>');
   }
   $('status').innerHTML = bits.join('<br>');
 
