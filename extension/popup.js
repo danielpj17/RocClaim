@@ -15,7 +15,7 @@ function localInputValue(d) {
 async function render() {
   const st = await get([
     'enabled', 'targetUrl', 'stopAt', 'polls', 'lastCheck',
-    'stoppedReason', 'stoppedAt', 'topic', 'log', 'provider', 'tgToken', 'tgChat', 'discordUrl', 'cartSnapshot', 'cartSnapshotAt', 'autoClaim', 'claimResult', 'lastResult', 'nextPollAt', 'lastSnapshot',
+    'stoppedReason', 'stoppedAt', 'topic', 'log', 'provider', 'tgToken', 'tgChat', 'discordUrl', 'cartSnapshot', 'cartSnapshotAt', 'cartPages', 'autoClaim', 'claimResult', 'lastResult', 'nextPollAt', 'lastSnapshot',
   ]);
 
   const provider = st.provider || 'telegram';
@@ -217,14 +217,14 @@ $('test').addEventListener('click', async () => {
 // The diagnostic box is small and the interesting part is usually the markup of
 // a control that has no label. One click puts the whole thing on the clipboard.
 $('copydiag').addEventListener('click', async () => {
-  const st = await get(['lastSnapshot', 'lastResult', 'cartSnapshot', 'cartSnapshotAt', 'claimResult', 'claimDetail']);
+  const st = await get(['lastSnapshot', 'lastResult', 'cartSnapshot', 'cartSnapshotAt', 'cartPages', 'claimResult', 'claimDetail']);
   const text = JSON.stringify(
     {
       lastResult: st.lastResult,
       snapshot: st.lastSnapshot,
       claimResult: st.claimResult,
       claimDetail: st.claimDetail,
-      cartSnapshot: st.cartSnapshot,
+      cartPages: st.cartPages || { legacy: st.cartSnapshot },
     },
     null,
     1

@@ -16,7 +16,7 @@ async function render() {
   const st = await get([
     'enabled', 'targetUrl', 'eventTitle', 'seasonCode', 'itemCode', 'authz',
     'stopAt', 'polls', 'lastCheck', 'lastResult', 'lastDetail', 'nextPollAt',
-    'stoppedReason', 'stoppedAt', 'topic', 'log', 'provider', 'tgToken', 'tgChat', 'discordUrl', 'cartSnapshot', 'cartSnapshotAt', 'lastRawAnswer', 'autoClaim', 'claimResult', 'criteria', 'cartId',
+    'stoppedReason', 'stoppedAt', 'topic', 'log', 'provider', 'tgToken', 'tgChat', 'discordUrl', 'cartSnapshot', 'cartSnapshotAt', 'cartPages', 'lastRawAnswer', 'autoClaim', 'claimResult', 'criteria', 'cartId',
   ]);
 
   const provider = st.provider || 'telegram';
@@ -132,14 +132,14 @@ $('tgFind').addEventListener('click', async () => {
 // Hands over whatever has been captured -- the cart page above all, since its
 // markup is the last guessed thing in the project.
 $('copydiag').addEventListener('click', async () => {
-  const st = await get(['cartSnapshot', 'cartSnapshotAt', 'lastResult', 'lastRawAnswer', 'claimResult', 'claimDetail']);
+  const st = await get(['cartSnapshot', 'cartSnapshotAt', 'cartPages', 'lastResult', 'lastRawAnswer', 'claimResult', 'claimDetail']);
   const text = JSON.stringify(
     {
       lastResult: st.lastResult,
       lastRawAnswer: st.lastRawAnswer,
       claimResult: st.claimResult,
       claimDetail: st.claimDetail,
-      cartSnapshot: st.cartSnapshot,
+      cartPages: st.cartPages || { legacy: st.cartSnapshot },
     },
     null,
     1

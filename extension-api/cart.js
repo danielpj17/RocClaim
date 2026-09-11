@@ -43,9 +43,17 @@
         if (C.SELECTORS.cartMarker.test(t)) break;
         await new Promise((r) => setTimeout(r, 250));
       }
+      // Keyed by which page it was, because a claim walks cart -> checkout and
+      // a single slot means the second one silently erases the first. Both are
+      // wanted: the forward button on the cart is a different control from the
+      // one that actually places the order on checkout.
+      const prior = (await get(['cartPages'])).cartPages || {};
+      prior[where] = { snapshot: C.snapshot(), at: Date.now() };
       await set({
-        cartSnapshot: C.snapshot(),
-        cartSnapshotAt: Date.now(),
+        cartPages: prior,
+        // Kept for the popup's "captured at" line and for older stored state.
+        cartSnapshot: prior[where].snapshot,
+        cartSnapshotAt: prior[where].at,
         cartSnapshotWhere: where,
       });
     }
