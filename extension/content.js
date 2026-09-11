@@ -150,23 +150,28 @@ async function runProbe(st, polls) {
   }
 
   if (result.state === 'available') {
-    // Stop immediately. The page is left exactly as the search left it, so he
-    // takes over from wherever it got to -- this never clicks past the search.
-    await stop('the seat search found something');
-    // seatFoundAt is what authorises the cart page to finish the claim. Without
-    // it, opening /cart by hand while auto-claim is armed would place an order.
-    await set({ lastResult: 'SEATS FOUND', lastResultAt: Date.now(), seatFoundAt: Date.now(), claimResult: null });
-    await send({
-      type: 'notify',
-      title: 'ROC SEAT FOUND -- GO NOW',
-      message:
-        'The seat search came back with something other than "Seats Not Found" after ' +
-        polls + ' checks.\n\n' + result.detail + '\n\n' +
-        'The watch has STOPPED and the page has been left exactly where the search ' +
-        'put it. Nothing past the search was clicked -- finish the claim yourself.\n' +
-        location.href,
-      priority: 'urgent',
-      click: location.href,
+    // ONE storage write, and then nothing. A real success navigates to /cart
+    // within a few hundred milliseconds and tears this script down; anything
+    // after the first awaited call may never run. So everything -- the stop,
+    // the authorisation for auto-claim, and the details of the push -- goes in
+    // a single write, and background.js sends the notification when it sees
+    // that write land. The worker survives the navigation; this script does not.
+    //
+    // The 11pm false positive pushed fine only because nothing navigated. The
+    // real case is the one that would have gone silent.
+    const now = Date.now();
+    await set({
+      enabled: false,
+      stoppedReason: 'the seat search found something',
+      stoppedAt: now,
+      lastResult: 'SEATS FOUND',
+      lastResultAt: now,
+      // seatFoundAt authorises the cart page to finish the claim. Without it,
+      // opening /cart by hand while auto-claim is armed would place an order.
+      seatFoundAt: now,
+      claimResult: null,
+      claimAttempts: {},
+      seatFound: { at: now, url: location.href, detail: result.detail, polls },
     });
     return;
   }

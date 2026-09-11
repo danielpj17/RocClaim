@@ -302,7 +302,30 @@ chrome.alarms.onAlarm.addListener((alarm) => {
 // stops a watch -- the popup, the content script, the watchdog -- is covered
 // without each having to remember.
 chrome.storage.onChanged.addListener((changes, area) => {
-  if (area === 'local' && changes.enabled) syncAlarm();
+  if (area !== 'local') return;
+  if (changes.enabled) syncAlarm();
+
+  // The seat-found push is sent from HERE, not from the page. The content
+  // script writes one record and may be torn down by the navigation to /cart
+  // before it could do anything else; this worker is not.
+  if (changes.seatFound && changes.seatFound.newValue) {
+    const f = changes.seatFound.newValue;
+    get(['autoClaim']).then(({ autoClaim }) =>
+      notify({
+        title: 'ROC SEAT FOUND -- GO NOW',
+        message:
+          'A seat came back after ' + (f.polls || '?') + ' checks and is held in your cart ' +
+          'for about ten minutes.\n\n' + (f.detail || '') + '\n\n' +
+          (autoClaim
+            ? 'Auto-claim is ON and is finishing the checkout. You will get a second push ' +
+              'saying CLAIMED, or one saying it needs you.'
+            : 'The watch has STOPPED. Finish the claim yourself.') +
+          '\n' + (f.url || ''),
+        priority: 'urgent',
+        click: f.url || undefined,
+      })
+    );
+  }
 });
 
 chrome.runtime.onStartup.addListener(syncAlarm);

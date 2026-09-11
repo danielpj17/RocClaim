@@ -119,6 +119,20 @@ var ROCCloseCart = (function () {
     return 'elsewhere';
   }
 
+  // One attempt per PAGE per reservation -- not one per reservation.
+  //
+  // A claim is two navigations: clicking Checkout on /cart loads /checkout, and
+  // a fresh content script starts there. A single "already attempted" flag
+  // stalled the flow at that second page forever, one click short of the order.
+  // The thing to prevent is re-clicking the SAME page, which is what a retry
+  // loop on a checkout looks like.
+  function shouldAttempt(where, attempts, seatFoundAt) {
+    if (!seatFoundAt) return false;
+    const a = (attempts || {})[where];
+    if (a && Number(a) >= Number(seatFoundAt)) return false;
+    return true;
+  }
+
   // Pure, so the decision is testable without a browser.
   function stepVerdict({ url, text, hasPaymentField, forwardLabel }) {
     if (whereAmI(url) === 'order' || SELECTORS.orderPlaced.test(text || '')) {
@@ -217,6 +231,7 @@ var ROCCloseCart = (function () {
     priceVerdict,
     whereAmI,
     stepVerdict,
+    shouldAttempt,
     findForward,
     labelOf,
     snapshot,

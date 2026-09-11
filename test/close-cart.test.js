@@ -179,3 +179,32 @@ test('LIVE: it never clicks more times than there are steps', async () => {
   const { clicks } = await walk(cartPage({ deadForward: true }));
   assert.ok(clicks.length <= C.MAX_STEPS, 'clicked ' + clicks.length + ' times: ' + JSON.stringify(clicks));
 });
+
+// --- the per-page attempt guard --------------------------------------------
+
+test('each page of the checkout gets its own attempt', () => {
+  // The bug: a per-reservation flag meant clicking Checkout on /cart loaded
+  // /checkout, a fresh script saw "already attempted", and the claim stalled
+  // one click short of the order -- every time.
+  const found = 1000;
+  const after = { cart: 1500 };
+  assert.equal(C.shouldAttempt('cart', after, found), false, 'the cart step already ran');
+  assert.equal(C.shouldAttempt('checkout', after, found), true, 'the checkout step has not');
+});
+
+test('the same page is never retried for the same reservation', () => {
+  // The thing the guard is actually for: a retry loop on a checkout is how you
+  // end up with two tickets.
+  assert.equal(C.shouldAttempt('checkout', { checkout: 2000 }, 1000), false);
+});
+
+test('a new reservation resets every step', () => {
+  const stale = { cart: 1500, checkout: 1600 };
+  assert.equal(C.shouldAttempt('cart', stale, 5000), true);
+  assert.equal(C.shouldAttempt('checkout', stale, 5000), true);
+});
+
+test('no reservation means no attempt, whatever the page', () => {
+  assert.equal(C.shouldAttempt('cart', {}, null), false);
+  assert.equal(C.shouldAttempt('checkout', {}, undefined), false);
+});

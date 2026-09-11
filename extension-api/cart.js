@@ -25,7 +25,7 @@
     const where = C.whereAmI(location.href);
     if (where !== 'cart' && where !== 'checkout' && where !== 'order') return;
 
-    const st = await get(['autoClaim', 'seatFoundAt', 'claimAttemptAt', 'claimResult', 'targetUrl']);
+    const st = await get(['autoClaim', 'seatFoundAt', 'claimAttemptAt', 'claimAttempts', 'claimResult', 'targetUrl']);
 
     // Record what this page looks like, ALWAYS -- armed or not, ours or not.
     //
@@ -84,9 +84,12 @@
     const recent = st.seatFoundAt && Date.now() - Number(st.seatFoundAt) < 12 * 60 * 1000;
     if (!recent) return;
 
-    // One attempt per reservation, ever.
-    if (st.claimAttemptAt && Number(st.claimAttemptAt) >= Number(st.seatFoundAt)) return;
-    await set({ claimAttemptAt: Date.now(), claimResult: null });
+    // One attempt per PAGE per reservation. See shouldAttempt() for why a
+    // per-reservation flag was a bug that stalled every claim at /checkout.
+    const attempts = st.claimAttempts || {};
+    if (!C.shouldAttempt(where, attempts, st.seatFoundAt)) return;
+    attempts[where] = Date.now();
+    await set({ claimAttempts: attempts, claimAttemptAt: Date.now(), claimResult: null });
 
     const result = await C.run({});
 
