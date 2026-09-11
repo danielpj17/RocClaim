@@ -65,7 +65,17 @@ async function render() {
     bits.push('<span class="muted">cart page captured ' + fmt(st.cartSnapshotAt) + ' &mdash; send it to Claude</span>');
   }
   $('status').innerHTML = bits.join('<br>');
-  $('diagwrap').hidden = !(st.cartSnapshot || st.lastRawAnswer);
+  // Always shown. Hidden-until-useful meant nobody could find it.
+  const have = [];
+  if (st.cartPages && st.cartPages.cart) have.push('cart page');
+  if (st.cartPages && st.cartPages.checkout) have.push('checkout page');
+  if (!st.cartPages && st.cartSnapshot) have.push('cart page');
+  if (st.lastRawAnswer) have.push('raw server answer');
+  $('diagwrap').hidden = false;
+  $('copydiag').disabled = have.length === 0;
+  $('copydiag').textContent = have.length
+    ? 'Copy diagnostics (' + have.join(', ') + ')'
+    : 'Copy diagnostics — nothing captured yet';
 
   $('log').textContent = (st.log || [])
     .slice(-8)
@@ -151,7 +161,7 @@ $('copydiag').addEventListener('click', async () => {
     $('diag').textContent = text;
     $('copydiag').textContent = 'Clipboard blocked — select the text below';
   }
-  setTimeout(() => ($('copydiag').textContent = 'Copy diagnostics'), 4000);
+  setTimeout(render, 4000);
 });
 
 $('start').addEventListener('click', async () => {

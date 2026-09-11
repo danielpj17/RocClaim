@@ -114,7 +114,9 @@ test('the status line reports what the probe last found', async () => {
   assert.match(status, /WATCHING/);
   assert.match(status, /12 checks/);
   assert.match(status, /no seats/, 'the probe answer is the point of the first run');
-  assert.equal(await page.locator('#diag').isVisible(), false, 'no diagnostics when it can read the page');
+  assert.equal(await page.locator('#diag').isVisible(), false, 'no control dump when it can read the page');
+  assert.equal(await page.locator('#copydiag').isVisible(), true, 'but the copy button is always there');
+  assert.equal(await page.locator('#copydiag').isDisabled(), true, 'disabled, saying nothing is captured yet');
   await page.close();
 });
 

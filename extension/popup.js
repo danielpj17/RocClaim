@@ -15,7 +15,7 @@ function localInputValue(d) {
 async function render() {
   const st = await get([
     'enabled', 'targetUrl', 'stopAt', 'polls', 'lastCheck',
-    'stoppedReason', 'stoppedAt', 'topic', 'log', 'provider', 'tgToken', 'tgChat', 'discordUrl', 'cartSnapshot', 'cartSnapshotAt', 'cartPages', 'autoClaim', 'claimResult', 'lastResult', 'nextPollAt', 'lastSnapshot',
+    'stoppedReason', 'stoppedAt', 'topic', 'log', 'provider', 'tgToken', 'tgChat', 'discordUrl', 'cartSnapshot', 'cartSnapshotAt', 'cartPages', 'lastRawAnswer', 'autoClaim', 'claimResult', 'lastResult', 'nextPollAt', 'lastSnapshot',
   ]);
 
   const provider = st.provider || 'telegram';
@@ -63,6 +63,20 @@ async function render() {
   // difference between "it is broken" and "here is the selector to fix".
   const snap = st.lastSnapshot || st.cartSnapshot;
   const diag = $('diag');
+  const have = [];
+  if (st.cartPages && st.cartPages.cart) have.push('cart page');
+  if (st.cartPages && st.cartPages.checkout) have.push('checkout page');
+  if (!st.cartPages && st.cartSnapshot) have.push('cart page');
+  if (st.lastSnapshot) have.push('probe snapshot');
+  if (st.lastRawAnswer) have.push('raw server answer');
+
+  // Always shown. Hidden-until-useful meant nobody could find it.
+  $('diagwrap').hidden = false;
+  $('copydiag').disabled = have.length === 0;
+  $('copydiag').textContent = have.length
+    ? 'Copy diagnostics (' + have.join(', ') + ')'
+    : 'Copy diagnostics — nothing captured yet';
+
   if (snap) {
     const rows = (snap.controls || [])
       .map((c) => `  ${c.tag} "${c.txt || ''}"${c.aria ? ' aria="' + c.aria + '"' : ''}${c.dis ? ' [disabled]' : ''}`)
@@ -72,9 +86,9 @@ async function render() {
 text: ${(snap.text || '').slice(0, 120)}
 controls:
 ${rows}`;
-    $('diagwrap').hidden = false;
+    diag.hidden = false;
   } else {
-    $('diagwrap').hidden = true;
+    diag.hidden = true;
   }
 
   $('log').textContent = (st.log || [])
@@ -236,7 +250,7 @@ $('copydiag').addEventListener('click', async () => {
     $('diag').textContent = text; // clipboard blocked: at least show it all
     $('copydiag').textContent = 'Clipboard blocked — select the text below';
   }
-  setTimeout(() => ($('copydiag').textContent = 'Copy diagnostics'), 4000);
+  setTimeout(render, 4000);
 });
 
 $('autoclaim').addEventListener('change', async () => {
