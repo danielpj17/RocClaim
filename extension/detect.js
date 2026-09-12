@@ -211,6 +211,13 @@ var ROCDetect = (function () {
   // the loop polled at 8-12s; leaving it there once the interval tripled would
   // have made the watchdog fire on healthy cycles and reload the tab out from
   // under a probe that was still waiting for its answer.
+  //
+  // 180s only holds because the probe now ticks the heartbeat at every stage
+  // (probe-dom.js `beat()`). A backgrounded tab throttles setTimeout to about
+  // once a minute, so one cycle's internal waits can stretch past 180s; without
+  // per-stage heartbeats the watchdog wrongly called that dead and reloaded,
+  // which is the "it keeps refreshing" symptom. Do not remove those beats and
+  // then trust this number.
   const STALL_MS = 180000;
 
   function watchdogVerdict(state, now, options) {

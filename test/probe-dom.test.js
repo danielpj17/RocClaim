@@ -625,3 +625,29 @@ test('LIVE: without confirmation a page with no price still refuses to search', 
   assert.notEqual(result.state, 'unavailable');
   assert.ok(!clicks.includes('primary'), 'must not run the search: ' + JSON.stringify(clicks));
 });
+
+// --- the heartbeat keeps a throttled cycle from looking dead -----------------
+
+test('LIVE: the cycle beats its heartbeat at every stage', async () => {
+  // In a backgrounded tab Chrome throttles setTimeout to ~1/min, so one cycle
+  // can outlast the 180s stall threshold even though nothing is wrong. The
+  // watchdog only sees one heartbeat per cycle and wrongly reloads. The fix is
+  // to tick the heartbeat at each stage; this asserts it happens several times
+  // across a single cycle, so a slow cycle stays "alive".
+  const ctx = await browser.newContext();
+  const p = await ctx.newPage();
+  await p.setContent(livePage());
+  await p.addScriptTag({ path: PROBE_PATH });
+  const beats = await p.evaluate(async () => {
+    let n = 0;
+    await ROCProbeDom.runCycle({
+      fingerprint: (s) => String(s).replace(/\s+/g, ' ').trim(),
+      waitMs: 1500,
+      readyMs: 4000,
+      heartbeat: () => { n++; },
+    });
+    return n;
+  });
+  await ctx.close();
+  assert.ok(beats >= 3, 'expected the heartbeat to fire at several stages, got ' + beats);
+});

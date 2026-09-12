@@ -139,6 +139,9 @@ async function runProbe(st, polls) {
     fingerprint: fp,
     freeConfirmed: free === true,
     observed: (since) => observedSince(since || startedAt),
+    // Keep the heartbeat fresh through a slow, throttled cycle so the watchdog
+    // does not mistake a backgrounded tab for a dead loop. See CLAUDE.md 0.5.
+    heartbeat: () => set({ lastCheck: Date.now() }),
     log: (line) => void line,
   });
 

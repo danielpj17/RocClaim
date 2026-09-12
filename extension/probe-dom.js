@@ -394,6 +394,13 @@ var ROCProbeDom = (function () {
     const waitMs = opts.waitMs || 8000;
     const settleMs = opts.settleMs || 400;
     const log = opts.log || (() => {});
+    // Called at the start of every wait-loop below. In a backgrounded tab
+    // Chrome throttles setTimeout to about once a minute, so a single cycle can
+    // stretch past three minutes even though nothing is wrong -- and the
+    // watchdog, which only sees one heartbeat per cycle, wrongly calls that
+    // dead and reloads the tab. Ticking the heartbeat at each stage keeps a
+    // slow-but-alive cycle from looking dead. See CLAUDE.md 0.5.
+    const beat = typeof opts.heartbeat === 'function' ? opts.heartbeat : () => {};
 
     const bodyText = () => (document.body ? document.body.innerText : '');
 
@@ -410,6 +417,7 @@ var ROCProbeDom = (function () {
       SELECTORS.pageMarker.test(bodyText()) &&
       (findIncrementStructurally() || enabledSearch());
 
+    beat();
     const readyBy = Date.now() + (opts.readyMs || 15000);
     while (!actionable() && Date.now() < readyBy) {
       await sleep(250);
@@ -508,6 +516,7 @@ var ROCProbeDom = (function () {
       // The search button going live is the thing we actually need, it is the
       // thing the next step consumes, and it is unambiguous. The readout is
       // kept only as a secondary signal and for the diagnostic message.
+      beat();
       const settleBy = Date.now() + (opts.settleMs || 4000);
       while (Date.now() < settleBy) {
         await sleep(120);
@@ -538,6 +547,7 @@ var ROCProbeDom = (function () {
     // fall back to the label. Either way it must be enabled -- the same element
     // reads "No Tickets Selected" and is disabled until a quantity is chosen.
     let search = enabledSearch();
+    beat();
     const searchBy = Date.now() + 4000;
     while (!search && Date.now() < searchBy) {
       await sleep(120);
@@ -557,6 +567,7 @@ var ROCProbeDom = (function () {
     // not just at scan time -- the page may have re-rendered underneath us.
     // Re-read against the live page, now that a quantity is set and the amount
     // has had a chance to appear.
+    beat();
     const priceBy = Date.now() + (opts.priceMs || 5000);
     price = opts.freeConfirmed ? { ok: true, found: [], max: 0 } : priceVerdict(bodyText());
     while (!price.ok && price.kind === 'noEvidence' && Date.now() < priceBy) {
@@ -596,6 +607,7 @@ var ROCProbeDom = (function () {
     log('ran the seat search');
 
     // 4. Wait for the answer.
+    beat();
     const deadline = Date.now() + waitMs;
     let outcome = null;
     let lastFp = beforeFp;
