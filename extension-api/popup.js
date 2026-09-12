@@ -142,13 +142,19 @@ $('tgFind').addEventListener('click', async () => {
 // Hands over whatever has been captured -- the cart page above all, since its
 // markup is the last guessed thing in the project.
 $('copydiag').addEventListener('click', async () => {
-  const st = await get(['cartSnapshot', 'cartSnapshotAt', 'cartPages', 'lastResult', 'lastRawAnswer', 'claimResult', 'claimDetail']);
+  const st = await get([
+    'cartSnapshot', 'cartSnapshotAt', 'cartPages', 'lastResult', 'lastRawAnswer',
+    'claimResult', 'claimDetail', 'claimedBy', 'autoClicks', 'log',
+  ]);
   const text = JSON.stringify(
     {
       lastResult: st.lastResult,
       lastRawAnswer: st.lastRawAnswer,
       claimResult: st.claimResult,
+      claimedBy: st.claimedBy,
       claimDetail: st.claimDetail,
+      autoClicks: st.autoClicks,
+      log: st.log,
       cartPages: st.cartPages || { legacy: st.cartSnapshot },
     },
     null,

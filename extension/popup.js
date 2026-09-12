@@ -231,13 +231,24 @@ $('test').addEventListener('click', async () => {
 // The diagnostic box is small and the interesting part is usually the markup of
 // a control that has no label. One click puts the whole thing on the clipboard.
 $('copydiag').addEventListener('click', async () => {
-  const st = await get(['lastSnapshot', 'lastResult', 'cartSnapshot', 'cartSnapshotAt', 'cartPages', 'claimResult', 'claimDetail']);
+  const st = await get([
+    'lastSnapshot', 'lastResult', 'cartSnapshot', 'cartSnapshotAt', 'cartPages',
+    'claimResult', 'claimDetail', 'claimedBy', 'autoClicks', 'log',
+  ]);
   const text = JSON.stringify(
     {
       lastResult: st.lastResult,
-      snapshot: st.lastSnapshot,
       claimResult: st.claimResult,
+      // Who actually placed the order -- "auto" only if the walker recorded
+      // clicking Place Order, "you" otherwise. This is the field that answers
+      // whether auto-claim really drove the checkout.
+      claimedBy: st.claimedBy,
       claimDetail: st.claimDetail,
+      autoClicks: st.autoClicks,
+      // The event log: the sequence of pushes and steps. This is the ground
+      // truth for what happened, and the reason a bare "claimed" is not enough.
+      log: st.log,
+      snapshot: st.lastSnapshot,
       cartPages: st.cartPages || { legacy: st.cartSnapshot },
     },
     null,
