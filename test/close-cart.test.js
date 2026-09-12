@@ -296,3 +296,32 @@ test('REAL pages: both are free and neither asks for payment', async () => {
     assert.equal(v.action, 'click', JSON.stringify(v));
   }
 });
+
+// --- who actually clicked: auto vs manual -----------------------------------
+
+test('the walker records each forward click before it fires it', async () => {
+  // A forward click navigates and tears the script down, so recording it
+  // afterward is too late. This is the only durable proof the extension drove
+  // a step -- and the thing that stops /order taking credit for a manual claim.
+  const ctx = await browser.newContext();
+  const p = await ctx.newPage();
+  await p.setContent(REAL_CART);
+  await p.addScriptTag({ path: CLOSE_PATH });
+  const recorded = await p.evaluate(async () => {
+    const seen = [];
+    await ROCCloseCart.run({
+      readyMs: 1000,
+      stepTimeoutMs: 800,
+      // Prove the recorder runs BEFORE the click: capture the label and the
+      // fact that at record time nothing had been clicked yet.
+      beforeClick: (label) => {
+        seen.push({ label, clicksSoFar: (window.__clicks || []).length });
+      },
+    });
+    return seen;
+  });
+  await ctx.close();
+  assert.ok(recorded.length >= 1, 'beforeClick must fire');
+  assert.equal(recorded[0].label, 'Checkout', 'it records the button it is about to click');
+  assert.equal(recorded[0].clicksSoFar, 0, 'and it records BEFORE clicking, not after');
+});

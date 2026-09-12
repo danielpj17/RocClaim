@@ -25,7 +25,7 @@
     const where = C.whereAmI(location.href);
     if (where !== 'cart' && where !== 'checkout' && where !== 'order') return;
 
-    const st = await get(['autoClaim', 'seatFoundAt', 'claimAttemptAt', 'claimAttempts', 'claimResult', 'targetUrl']);
+    const st = await get(['autoClaim', 'seatFoundAt', 'claimAttemptAt', 'claimAttempts', 'autoClicks', 'claimResult', 'targetUrl']);
 
     // Record what this page looks like, ALWAYS -- armed or not, ours or not.
     //
@@ -58,15 +58,27 @@
       });
     }
 
-    // An order page reached after our own attempt: record the win and say so.
+    // An order page. The order is placed -- but reaching /order does NOT prove
+    // the extension placed it: a forward click navigates here and tears the
+    // walker down before it can record a result, so a human clicking through
+    // lands here identically. The honest signal is autoClicks: the walker
+    // records each forward button it actually clicked, just before clicking.
+    // If it clicked Place Order on checkout recently, the automation drove the
+    // final step; otherwise the human did, and we must not claim otherwise.
     if (where === 'order') {
       if (st.claimAttemptAt && !st.claimResult) {
-        await set({ claimResult: 'claimed', claimedAt: Date.now() });
+        const clicks = st.autoClicks || {};
+        const drove = clicks.checkout && Date.now() - Number(clicks.checkout) < 2 * 60 * 1000;
+        await set({ claimResult: 'claimed', claimedBy: drove ? 'auto' : 'you', claimedAt: Date.now() });
         await send({
           type: 'notify',
-          title: 'ROC TICKET CLAIMED',
+          title: drove ? 'ROC TICKET CLAIMED (auto)' : 'ROC ticket claimed',
           message:
-            'The ticket is claimed and the order is placed.\n\n' +
+            (drove
+              ? 'Auto-claim placed the order.\n\n'
+              : 'An order was placed and reached the confirmation page. It looks like ' +
+                'you clicked through the last step yourself -- auto-claim did not record ' +
+                'placing it.\n\n') +
             'If your plans change, RETURN IT rather than not showing up -- not attending ' +
             'and not returning counts against future access.\n' + location.href,
           priority: 'urgent',
@@ -91,10 +103,20 @@
     attempts[where] = Date.now();
     await set({ claimAttempts: attempts, claimAttemptAt: Date.now(), claimResult: null });
 
-    const result = await C.run({});
+    // Record every forward button the walker actually clicks, keyed by page,
+    // before the click navigates away. This is what lets /order tell an
+    // auto-claim from a manual finish.
+    const result = await C.run({
+      beforeClick: async (label) => {
+        const cur = (await get(['autoClicks'])).autoClicks || {};
+        cur[where] = Date.now();
+        cur[where + 'Label'] = label;
+        await set({ autoClicks: cur });
+      },
+    });
 
     if (result.state === 'claimed') {
-      await set({ claimResult: 'claimed', claimedAt: Date.now() });
+      await set({ claimResult: 'claimed', claimedBy: 'auto', claimedAt: Date.now() });
       await send({
         type: 'notify',
         title: 'ROC TICKET CLAIMED',

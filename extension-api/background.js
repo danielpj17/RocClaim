@@ -245,6 +245,7 @@ async function runPoll() {
       seatFoundAt: Date.now(),
       claimResult: null,
       claimAttemptAt: null,
+      autoClicks: {},
     });
 
     // This extension has no page of its own, so auto-claim needs one opened.

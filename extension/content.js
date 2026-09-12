@@ -174,6 +174,7 @@ async function runProbe(st, polls) {
       seatFoundAt: now,
       claimResult: null,
       claimAttempts: {},
+      autoClicks: {},
       seatFound: { at: now, url: location.href, detail: result.detail, polls },
     });
     return;

@@ -633,9 +633,31 @@ Hardened now that the real DOM is known:
   Order are chosen and that Remove, Change, Continue Shopping, the back arrow
   and Cancel Order never are.
 
-So auto-claim is no longer "expect handover until the cart DOM is captured"
-(section 0.10). It is confirmed working, on the exact pages, with the
-destructive neighbours of the forward button proven un-clickable.
+**CORRECTION (2026-09-11, same day): the earlier claim in this section that
+auto-claim "ran the whole way through on its own" was wrong.** Daniel said he
+clicked Checkout and Place Order himself. The extension had recorded
+claimResult "claimed" anyway, because the /order branch in cart.js set it
+whenever an attempt was flagged and no result was written -- and a forward
+click navigates to /order and tears the walker down before it can write a
+result, so a HUMAN clicking through lands there identically and trips the same
+branch. The green "CLAIMED" was not evidence the automation worked. That is the
+exact silent-failure class this project exists to avoid, and it was in the one
+piece that spends a ticket.
+
+Fixed: the walker now records each forward button it actually clicks
+(autoClicks, keyed by page, written just BEFORE the click since the click
+navigates away). The /order branch attributes the claim to "auto" only if it
+recorded clicking Place Order on checkout in the last two minutes; otherwise it
+says plainly the order looks manually finished (claimedBy: "you"). Whether the
+walker actually drives the buttons on the real site is STILL UNCONFIRMED -- the
+next armed run with autoClicks recording will finally answer it. Read the popup
+log and claimedBy after it; do not trust a bare "claimed".
+
+So the cart/checkout SELECTORS are now confirmed from the real DOM and the
+destructive neighbours (Continue Shopping, Cancel Order, Remove, Change, back)
+are proven un-clickable by tests built from the captured markup. What is NOT yet
+confirmed is that the walker's clicks actually drive those buttons on the live
+site -- that is the open question autoClicks exists to answer.
 
 **Still true:** it only ever arms when Daniel turns it on, it re-checks free on
 the live page before every click, one attempt per page per reservation, and a
@@ -1246,7 +1268,7 @@ countdown is not a change, "COMING SOON" becoming "Buy" *is*, and
 
 ## 13. Test suite
 
-**202 tests, all passing** (`npm test`), 49 of them driving real headless
+**204 tests, all passing** (`npm test`), 49 of them driving real headless
 Chromium against real DOM.
 
 - `test/watcher.test.js` — 16, fake clock, no network

@@ -207,6 +207,18 @@ var ROCCloseCart = (function () {
       }
 
       const beforeUrl = location.href;
+      // Record the click BEFORE it happens: it usually navigates the page and
+      // tears this script down before anything after it can run, so this is the
+      // only durable proof that the extension -- not the human -- drove this
+      // step. cart.js uses it to decide whether a placed order was auto-claimed
+      // or finished by hand, instead of taking credit for either.
+      if (typeof opts.beforeClick === 'function') {
+        try {
+          await opts.beforeClick(labelOf(fwd));
+        } catch {
+          // recording is best-effort; never let it block the click
+        }
+      }
       fwd.click();
       clicked.push(verdict.detail);
 
