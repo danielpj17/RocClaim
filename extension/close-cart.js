@@ -39,12 +39,22 @@ var ROCCloseCart = (function () {
     cartMarker: /review order|your cart|order summary/i,
     orderPlaced: /order (confirmed|complete|placed)|thank you|your tickets are|confirmation number/i,
 
-    // The forward control on each step. Guessed -- the cart DOM has not been
-    // captured yet -- which is exactly why failure falls back to notify.
-    forward: /^(checkout|continue|proceed|place order|place your order|complete order|submit order|complete purchase|confirm|continue to checkout)$/i,
+    // The forward control on each step, CONFIRMED from a real end-to-end claim
+    // (Women's Volleyball, 2026-09-11): the cart's button is
+    // data-testid="checkout-button" / "Checkout", and checkout's is
+    // data-testid="place-order-..." / "Place Order". Test ids first because they
+    // are stable; the label regex stays as a fallback for a restyle. The regex
+    // is ANCHORED on purpose -- unanchored, "continue" would have matched the
+    // "Continue Shopping" button sitting right next to Checkout and walked the
+    // wrong way. (It nearly did; "continue" is dropped from the list entirely
+    // now, since no real forward control was a bare "Continue".)
+    forwardTestId: '[data-testid="checkout-button"], [data-testid^="place-order"]',
+    forward: /^(checkout|proceed|place order|place your order|complete order|submit order|complete purchase|confirm|continue to checkout)$/i,
 
-    // Never, at any price.
-    never: /\b(transfer|resell|resale|sell|donate|renew|insurance|protect)\b/i,
+    // Never, at any price. "cancel" is here because "Cancel Order" sits on the
+    // checkout page and clicking it throws the reservation away; "back" and
+    // "shopping" guard the two retreat controls that sit beside the forward one.
+    never: /\b(transfer|resell|resale|sell|donate|renew|insurance|protect|cancel|remove|back|shopping)\b/i,
 
     // If any of these exist the page wants money, whatever the total says.
     paymentFields: 'input[type=password], input[autocomplete*="cc-"], input[name*="card" i], input[id*="card" i], input[name*="cvv" i], iframe[src*="pay" i]',
@@ -85,6 +95,13 @@ var ROCCloseCart = (function () {
   }
 
   function findForward() {
+    // Exact test id first -- confirmed from the real claim, immune to label
+    // changes. It still must be usable and still must clear the refusal list,
+    // so a control BYU relabelled "Cancel" under the same id could not slip by.
+    const byId = document.querySelector(SELECTORS.forwardTestId);
+    if (byId && usable(byId) && !SELECTORS.never.test(labelOf(byId))) return byId;
+
+    // Fallback: match the label, for a restyle that moves the test id.
     const els = Array.from(document.querySelectorAll(CONTROL_SELECTOR));
     for (const el of els) {
       const label = labelOf(el);

@@ -98,8 +98,16 @@ test('the content script lifts the session token off the event page', async () =
   await put({ enabled: true, targetUrl: EVENT_URL, authz: null, seasonCode: null, itemCode: null });
   const page = await ctx.newPage();
   await page.goto(EVENT_URL);
-  await sleep(1200);
-  const st = await store(['authz', 'seasonCode', 'itemCode']);
+  // Poll for the write rather than sleeping a fixed 1200ms. Under CPU load --
+  // e.g. the whole suite running at once -- the content script does not always
+  // run and write within a fixed window, which made this the one flaky test.
+  // What is being tested is THAT the token is lifted, not how fast.
+  let st = {};
+  for (let i = 0; i < 40; i++) {
+    st = await store(['authz', 'seasonCode', 'itemCode']);
+    if (st.authz) break;
+    await sleep(150);
+  }
   assert.equal(st.authz, AUTHZ, 'the token must be read out of the page HTML');
   assert.equal(st.seasonCode, 'WS26');
   assert.equal(st.itemCode, 'E05');

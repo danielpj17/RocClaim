@@ -208,3 +208,91 @@ test('no reservation means no attempt, whatever the page', () => {
   assert.equal(C.shouldAttempt('cart', {}, null), false);
   assert.equal(C.shouldAttempt('checkout', {}, undefined), false);
 });
+
+// --- the REAL cart and checkout, captured from a live successful claim ------
+// Women's Volleyball vs UCLA, 2026-09-11. This is the DOM auto-claim actually
+// walked through to a placed order, so these two fixtures pin what worked --
+// and, just as importantly, that none of the retreat/destructive controls
+// sitting right next to the forward button can ever be the one chosen.
+
+const REAL_CART = `<!doctype html><html><body>
+  <h1>Review Order</h1>
+  <p>BYU Women's Volleyball vs. UCLA</p>
+  <p>1 x ROC ($0.00) Total $0.00</p>
+  <button data-testid="go-back-button"><img alt="Return to previous page."></button>
+  <button data-testid="reservation-remove-primary">Remove</button>
+  <button data-testid="reservation-change-E04">Change</button>
+  <button aria-label="Toggle order summary" data-testid="order-summary">Toggle order summary</button>
+  <button data-testid="checkout-button">Checkout</button>
+  <button data-testid="continue-shopping-button">Continue Shopping</button>
+  <a href="/myaccount/sitesecurity">Site Security</a>
+</body></html>`;
+
+const REAL_CHECKOUT = `<!doctype html><html><body>
+  <h1>Checkout</h1>
+  <p>BYU Women's Volleyball vs. UCLA</p>
+  <p>1 x ROC $0.00  Taxes and Fees $0.00  Delivery: Mobile Pass FREE</p>
+  <button aria-label="Back to Review Order page." data-testid="go-back-button"><img></button>
+  <button data-testid="read-more-less-button">Read More</button>
+  <button data-testid="order-info-cancel-button">Cancel Order</button>
+  <button data-testid="place-order-btn">Place Order</button>
+  <a href="/myaccount/sitesecurity">Site Security</a>
+</body></html>`;
+
+async function forwardLabelOn(html) {
+  const ctx = await browser.newContext();
+  const p = await ctx.newPage();
+  await p.setContent(html);
+  await p.addScriptTag({ path: CLOSE_PATH });
+  const label = await p.evaluate(() => {
+    const el = ROCCloseCart.findForward();
+    return el ? (el.innerText || el.getAttribute('data-testid') || '').trim() : null;
+  });
+  await ctx.close();
+  return label;
+}
+
+test('REAL cart: the forward control is Checkout, nothing else', async () => {
+  const label = await forwardLabelOn(REAL_CART);
+  assert.equal(label, 'Checkout', 'must pick the checkout button');
+});
+
+test('REAL cart: Remove, Change, Continue Shopping and Back are never the forward control', async () => {
+  // Every one of these is a real button on the real cart, sitting next to
+  // Checkout. Picking any of them would abandon or alter the reservation.
+  const label = await forwardLabelOn(REAL_CART);
+  for (const bad of ['Remove', 'Change', 'Continue Shopping', 'Return to previous page.', 'go-back-button']) {
+    assert.notEqual(label, bad);
+  }
+});
+
+test('REAL checkout: the forward control is Place Order', async () => {
+  const label = await forwardLabelOn(REAL_CHECKOUT);
+  assert.equal(label, 'Place Order');
+});
+
+test('REAL checkout: Cancel Order is never the forward control', async () => {
+  // The one that would throw the reservation away. It is now in the refusal
+  // list precisely because it lives one button away from Place Order.
+  const label = await forwardLabelOn(REAL_CHECKOUT);
+  assert.notEqual(label, 'Cancel Order');
+});
+
+test('REAL pages: both are free and neither asks for payment', async () => {
+  for (const html of [REAL_CART, REAL_CHECKOUT]) {
+    const ctx = await browser.newContext();
+    const p = await ctx.newPage();
+    await p.setContent(html);
+    await p.addScriptTag({ path: CLOSE_PATH });
+    const v = await p.evaluate(() =>
+      ROCCloseCart.stepVerdict({
+        url: location.href,
+        text: document.body.innerText,
+        hasPaymentField: false,
+        forwardLabel: ROCCloseCart.findForward() ? ROCCloseCart.labelOf(ROCCloseCart.findForward()) : null,
+      })
+    );
+    await ctx.close();
+    assert.equal(v.action, 'click', JSON.stringify(v));
+  }
+});

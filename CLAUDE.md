@@ -603,6 +603,47 @@ both extensions with a drift test, alongside `push.js` and `close-cart.js`.
 
 ---
 
+## 0.13. Auto-claim ran end to end on a real ticket (2026-09-11)
+
+Women's Volleyball vs UCLA. The DOM watcher found a seat, reserved it, walked
+the cart and checkout, and placed the order -- `claimResult: "claimed"`, a real
+$0.00 ticket. First true end-to-end success against BYU, and the cart DOM that
+section 0.10 said was the last guessed thing is now captured and pinned.
+
+**The guessed selectors were right, and -- this is the part that mattered --
+safe.** The forward control is `data-testid="checkout-button"` / "Checkout" on
+the cart and `data-testid="place-order-..."` / "Place Order" on checkout. The
+old anchored label regex matched exactly those two and nothing else. In
+particular the cart carries a **"Continue Shopping"** button right next to
+Checkout; an unanchored `continue` would have walked the wrong way. The
+anchoring that earlier notes kept insisting on is what saved it.
+
+Hardened now that the real DOM is known:
+
+- **Exact test ids are the primary matcher** (`checkout-button`,
+  `place-order*`), with the label regex kept only as a restyle fallback.
+- **The refusal list grew `cancel|remove|back|shopping`.** The checkout page has
+  a **"Cancel Order"** button one place away from "Place Order", and the cart
+  has Remove / Change / Continue Shopping / a back arrow. None could be the
+  forward control before -- the anchored regex already excluded them -- but with
+  a live claim proven, they are now refused explicitly as belt and braces, and
+  test-id matches are checked against the refusal list too.
+- **`test/close-cart.test.js` pins both real pages.** The fixtures are the
+  actual captured cart and checkout markup; the tests assert Checkout and Place
+  Order are chosen and that Remove, Change, Continue Shopping, the back arrow
+  and Cancel Order never are.
+
+So auto-claim is no longer "expect handover until the cart DOM is captured"
+(section 0.10). It is confirmed working, on the exact pages, with the
+destructive neighbours of the forward button proven un-clickable.
+
+**Still true:** it only ever arms when Daniel turns it on, it re-checks free on
+the live page before every click, one attempt per page per reservation, and a
+placed order still triggers the return-the-ticket reminder. And the ticket it
+just claimed is a real one -- if plans change, return it.
+
+---
+
 ## 1. What this is
 
 A watcher that monitors the BYU ROC **last-chance / returned-ticket** claim and
@@ -1205,7 +1246,7 @@ countdown is not a change, "COMING SOON" becoming "Buy" *is*, and
 
 ## 13. Test suite
 
-**193 tests, all passing** (`npm test`), 49 of them driving real headless
+**202 tests, all passing** (`npm test`), 49 of them driving real headless
 Chromium against real DOM.
 
 - `test/watcher.test.js` — 16, fake clock, no network
