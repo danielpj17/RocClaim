@@ -655,9 +655,19 @@ log and claimedBy after it; do not trust a bare "claimed".
 
 So the cart/checkout SELECTORS are now confirmed from the real DOM and the
 destructive neighbours (Continue Shopping, Cancel Order, Remove, Change, back)
-are proven un-clickable by tests built from the captured markup. What is NOT yet
-confirmed is that the walker's clicks actually drive those buttons on the live
-site -- that is the open question autoClicks exists to answer.
+are proven un-clickable by tests built from the captured markup.
+
+**CONFIRMED 2026-09-28: auto-claim genuinely drove the live checkout, end to
+end, untouched.** Women's Soccer vs TCU. The diagnostics settle it with the
+exact signal built to prevent the false positive: `claimedBy: "auto"`, and
+`autoClicks` recording `cart -> "Checkout"` then `checkout -> "Place Order"`
+1.2s apart -- both written by the walker immediately before it clicked, so they
+exist only if the extension itself clicked. The final log line is
+`ROC TICKET CLAIMED (auto)`; the Sep 11 manual claim is still above it in the
+log, correctly WITHOUT the "(auto)" suffix. Same run showed no stalls (the
+heartbeat fix, section 0.6/0.12, held once the extension was reloaded). The open
+question this section raised is answered: the walker's clicks land on the live
+buttons.
 
 **Still true:** it only ever arms when Daniel turns it on, it re-checks free on
 the live page before every click, one attempt per page per reservation, and a
