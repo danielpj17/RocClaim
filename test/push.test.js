@@ -126,6 +126,33 @@ test('every provider handles the real seat-found notification', () => {
   }
 });
 
+test('the link is not shown twice when the body already carries it', () => {
+  // The claim push reads "visit this link:" and then the URL. Appending the
+  // click target after it put the same link on the phone twice.
+  const msg = {
+    title: 'ROC TICKET CLAIMED (auto)',
+    message: 'Auto-claim placed the order.\n\nTo access or return your ticket, visit this link:\n' + 'https://byutickets.evenue.net/order/abc',
+    priority: 'urgent',
+    click: 'https://byutickets.evenue.net/order/abc',
+  };
+  for (const [prov, creds, read] of [
+    ['telegram', { token: '1:a', chatId: '2' }, (b) => JSON.parse(b).text],
+    ['discord', { webhook: 'https://discord.com/api/webhooks/1/a' }, (b) => JSON.parse(b).content],
+  ]) {
+    const body = read(P.build(prov, creds, msg).options.body);
+    const hits = body.split('/order/abc').length - 1;
+    assert.equal(hits, 1, prov + ' must show the link once, not ' + hits + ' times');
+  }
+});
+
+test('a click target still reaches providers that render it inline', () => {
+  const msg = { title: 'T', message: 'A seat came back.', click: 'https://byutickets.evenue.net/order/abc' };
+  const tg = JSON.parse(P.build('telegram', { token: '1:a', chatId: '2' }, msg).options.body).text;
+  const dc = JSON.parse(P.build('discord', { webhook: 'https://discord.com/api/webhooks/1/a' }, msg).options.body).content;
+  assert.ok(tg.includes('/order/abc'), 'telegram must still carry the link');
+  assert.ok(dc.includes('/order/abc'), 'discord must still carry the link');
+  assert.equal(P.withClick({ message: '', click: 'https://byutickets.evenue.net/order/abc' }), 'https://byutickets.evenue.net/order/abc');
+});
 // --- Telegram chat-id discovery ---------------------------------------------
 
 test('the chat id is read out of getUpdates so nobody reads raw JSON', () => {

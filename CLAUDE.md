@@ -759,7 +759,15 @@ lowering this number, stop.
 access for a pattern of claiming tickets and then neither attending nor
 returning them. A watcher left running forever will eventually claim an 11 p.m.
 Friday ticket for a game he has since decided to skip. The success notification
-must remind him to return the ticket if his plans changed.
+must point him at returning the ticket.
+
+**Shortened 2026-09-28, at Daniel's request.** The claim push used to carry a
+full paragraph -- "If your plans change, RETURN IT rather than not showing up
+-- not attending and not returning counts against future access." On a phone
+that is a wall of text above the one thing he needs, the order link. It now
+reads "To access or return your ticket, visit this link:" followed by the URL.
+The return path is still named and still one tap away; the lecture is gone.
+Do not restore the long version without asking him.
 
 **Whitelist, never blanket-claim.** One event per run, chosen deliberately.
 
@@ -1278,7 +1286,7 @@ countdown is not a change, "COMING SOON" becoming "Buy" *is*, and
 
 ## 13. Test suite
 
-**204 tests, all passing** (`npm test`), 49 of them driving real headless
+**206 tests, all passing** (`npm test`), 49 of them driving real headless
 Chromium against real DOM.
 
 - `test/watcher.test.js` — 16, fake clock, no network
@@ -1302,6 +1310,10 @@ Chromium against real DOM.
   live dumps
 - `test/popup.test.js` — 7, the popup loaded in real Chrome. It exists because
   a syntax error there shipped while 100 other tests passed
+- `test/push.test.js` — 16, the notification providers. Two pin that the link
+  appears once: the body already ends with the order URL, so the click target
+  is not appended after it again (Telegram and Discord render it inline; ntfy
+  carries it as a header and never showed it twice).
 - `lib/config.test.js` — 2, config merge and the 5s poll floor
 
 The suite is worth more than usual here, because the parts it covers are the

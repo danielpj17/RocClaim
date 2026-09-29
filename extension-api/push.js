@@ -69,8 +69,7 @@ var ROCPush = (function () {
         // message is a real push, which is the point.
         const text =
           '*' + escapeMd(msg.title || 'ROC Watcher') + '*\n' +
-          escapeMd(msg.message || '') +
-          (msg.click ? '\n\n' + escapeMd(msg.click) : '');
+          escapeMd(withClick(msg));
         return {
           url: 'https://api.telegram.org/bot' + String(c.token).trim() + '/sendMessage',
           options: {
@@ -105,14 +104,23 @@ var ROCPush = (function () {
               content:
                 (loud(msg.priority) ? '@everyone ' : '') +
                 '**' + (msg.title || 'ROC Watcher') + '**\n' +
-                (msg.message || '') +
-                (msg.click ? '\n' + msg.click : ''),
+                withClick(msg),
             }),
           },
         };
       },
     },
   };
+
+  // The click target is almost always the same URL the message body already
+  // ends with, and a provider that renders it inline would then show the link
+  // twice -- which is what the claim push actually looked like on the phone.
+  // ntfy is unaffected either way: there the click is a header, not body text.
+  function withClick(msg) {
+    const body = msg.message || '';
+    if (!msg.click || body.includes(msg.click)) return body;
+    return body + (body ? '\n\n' : '') + msg.click;
+  }
 
   // Telegram's MarkdownV2 rejects a message containing any unescaped reserved
   // character, and a rejected message is a silent miss. The URLs and dollar
@@ -175,7 +183,7 @@ var ROCPush = (function () {
     return { ok: true };
   }
 
-  return { PROVIDERS, build, accepted, ntfyPriority, escapeMd, telegramUpdatesUrl, readChatId };
+  return { PROVIDERS, build, accepted, ntfyPriority, escapeMd, withClick, telegramUpdatesUrl, readChatId };
 })();
 
 if (typeof globalThis !== 'undefined') globalThis.ROCPush = ROCPush;

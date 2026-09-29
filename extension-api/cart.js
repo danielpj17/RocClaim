@@ -79,8 +79,7 @@
               : 'An order was placed and reached the confirmation page. It looks like ' +
                 'you clicked through the last step yourself -- auto-claim did not record ' +
                 'placing it.\n\n') +
-            'If your plans change, RETURN IT rather than not showing up -- not attending ' +
-            'and not returning counts against future access.\n' + location.href,
+            'To access or return your ticket, visit this link:\n' + location.href,
           priority: 'urgent',
           click: location.href,
         });
@@ -122,8 +121,7 @@
         title: 'ROC TICKET CLAIMED',
         message:
           'The ticket is claimed and the order is placed.\n\n' +
-          'If your plans change, RETURN IT rather than not showing up -- not attending ' +
-          'and not returning counts against future access.\n' + location.href,
+          'To access or return your ticket, visit this link:\n' + location.href,
         priority: 'urgent',
         click: location.href,
       });
