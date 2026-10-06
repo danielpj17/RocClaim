@@ -40,7 +40,7 @@ Parts of that branch still worth carrying over:
   reorder with arrows, tick on/off, remove.
 - `test/queue.test.js` as a spec for those rules.
 
-## Step 1 — make the popup a side panel (small, do this first)
+## Step 1 — make the popup a side panel — DONE for `extension/` (2026-10-05)
 
 Applies to `extension/` (the "ROC Claim Watcher" Daniel actually clicks).
 Do the same to `extension-api/` if he uses that one too.

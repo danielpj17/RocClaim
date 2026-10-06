@@ -18,6 +18,12 @@
 
 importScripts('detect.js', 'push.js');
 
+// The UI is a side panel, not a popup: a popup closes the moment you click the
+// page, and this is something you keep an eye on while browsing. Clicking the
+// toolbar icon opens the panel. Called on every worker start because the
+// behaviour is not guaranteed to persist across updates.
+chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch(() => {});
+
 const DEFAULT_SERVER = 'https://ntfy.sh';
 const WATCHDOG_ALARM = 'roc-watchdog';
 

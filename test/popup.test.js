@@ -142,3 +142,64 @@ test('an unreadable page shows the diagnostic block', async () => {
   assert.match(diag, /\[disabled\]/);
   await page.close();
 });
+
+// --- side panel (2026-10-05) -------------------------------------------------
+// The UI moved from a popup to a side panel so it stays open while Daniel
+// clicks around the site. That changes what "this tab" means: the panel
+// outlives tab switches, so Watch arms whichever tab is in front, and must
+// refuse one that is not an event page.
+
+test('the manifest opens a side panel, not a popup', () => {
+  const m = JSON.parse(fs.readFileSync(path.join(EXT, 'manifest.json'), 'utf8'));
+  assert.ok(m.permissions.includes('sidePanel'));
+  assert.equal(m.side_panel && m.side_panel.default_path, 'popup.html');
+  assert.equal(m.action.default_popup, undefined, 'a default_popup would win over the panel on icon click');
+});
+
+test('clicking the toolbar icon opens the panel', async () => {
+  const b = await sw.evaluate(() => chrome.sidePanel.getPanelBehavior());
+  assert.equal(b.openPanelOnActionClick, true);
+});
+
+// Serve stand-in BYU pages so a real byutickets tab can sit in front without
+// touching the network.
+async function frontTabAt(url) {
+  await ctx.route('https://byutickets.evenue.net/**', (r) =>
+    r.fulfill({ status: 200, contentType: 'text/html', body: '<html><body>stand-in</body></html>' })
+  );
+  const tab = await ctx.newPage();
+  await tab.goto(url);
+  await tab.bringToFront();
+  return tab;
+}
+
+test('Watch refuses a BYU page that is not an event page', async () => {
+  const { page } = await openPopup({ enabled: false, targetUrl: null });
+  const tab = await frontTabAt('https://byutickets.evenue.net/students/events/STFB');
+  await page.waitForTimeout(400);
+  assert.match(await page.locator('#front').innerText(), /not a BYU event page/);
+  // evaluate() rather than click(), so the listing tab stays the active one.
+  await page.evaluate(() => document.getElementById('start').click());
+  await page.waitForTimeout(400);
+  assert.match(await page.locator('#status').innerText(), /not an event page/);
+  const st = await sw.evaluate(() => chrome.storage.local.get(['enabled']));
+  assert.notEqual(st.enabled, true, 'must not arm the listing page');
+  await tab.close();
+  await page.close();
+});
+
+test('Watch arms the event page that is in front', async () => {
+  const { page } = await openPopup({ enabled: false, targetUrl: null });
+  const url = 'https://byutickets.evenue.net/students/event/F26/E01';
+  const tab = await frontTabAt(url);
+  await page.waitForTimeout(400);
+  assert.match(await page.locator('#front').innerText(), /\/students\/event\/F26\/E01/);
+  await page.evaluate(() => document.getElementById('start').click());
+  await page.waitForTimeout(400);
+  const st = await sw.evaluate(() => chrome.storage.local.get(['enabled', 'targetUrl']));
+  assert.equal(st.enabled, true);
+  assert.equal(st.targetUrl, url);
+  await sw.evaluate(() => chrome.storage.local.set({ enabled: false }));
+  await tab.close();
+  await page.close();
+});

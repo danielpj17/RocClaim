@@ -12,6 +12,26 @@ function localInputValue(d) {
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
 }
 
+// What "Watch this tab" will arm. The panel stays open while you switch tabs, so
+// "this tab" is whichever one is in front right now -- which may not be the one
+// you opened the panel on. Only an event page is accepted: the probe runs the
+// seat search there, and arming the listing, the cart or another site would be
+// a watch that cannot work.
+const EVENT_URL = /^https:\/\/byutickets\.evenue\.net\/students\/event\/[^/?#]+\/[^/?#]+/;
+
+async function frontTab() {
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  return tab || null;
+}
+
+async function renderFront() {
+  const tab = await frontTab();
+  const url = (tab && tab.url) || '';
+  $('front').textContent = EVENT_URL.test(url)
+    ? 'Front tab: ' + url.replace(/^https?:\/\/[^/]+/, '').split('#')[0]
+    : 'Front tab is not a BYU event page -- open one to watch it.';
+}
+
 async function render() {
   const st = await get([
     'enabled', 'targetUrl', 'stopAt', 'polls', 'lastCheck',
@@ -39,7 +59,7 @@ async function render() {
     if (st.nextPollAt) bits.push(`<span class="muted">next check ~${fmt(st.nextPollAt)}</span>`);
     if (st.stopAt) bits.push(`stops at ${fmt(st.stopAt)}`);
     if (st.targetUrl) {
-      bits.push(`<span class="muted">${String(st.targetUrl).replace(/^https?:\/\//, '').slice(0, 46)}</span>`);
+      bits.push(`<span class="muted">${String(st.targetUrl).replace(/^https?:\/\//, '').slice(0, 80)}</span>`);
     }
   } else {
     bits.push('<span class="off">STOPPED</span>');
@@ -154,9 +174,10 @@ $('tgFind').addEventListener('click', async () => {
 });
 
 $('start').addEventListener('click', async () => {
-  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  if (!tab || !/^https:\/\/byutickets\.evenue\.net\//.test(tab.url || '')) {
-    $('status').textContent = 'Open the event page on byutickets.evenue.net first, then press this.';
+  const tab = await frontTab();
+  if (!tab || !EVENT_URL.test(tab.url || '')) {
+    $('status').textContent =
+      'The tab in front is not an event page. Open the game on byutickets.evenue.net (Buy Now -> Select Your Tickets), then press this.';
     return;
   }
 
@@ -279,5 +300,10 @@ $('autoclaim').addEventListener('change', async () => {
     $('stop-at').value = localInputValue(d);
   }
   await render();
+  await renderFront();
   setInterval(render, 2000);
+  // The panel outlives tab switches, so keep the "Front tab" line honest.
+  chrome.tabs.onActivated.addListener(renderFront);
+  chrome.tabs.onUpdated.addListener((id, info) => { if (info.url || info.status === 'complete') renderFront(); });
+  chrome.windows.onFocusChanged.addListener(renderFront);
 })();

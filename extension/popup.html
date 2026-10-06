@@ -4,8 +4,10 @@
     <meta charset="utf-8" />
     <style>
       :root { color-scheme: light dark; }
+      /* Side panel: Chrome sets the width (about 320-700px, user-resizable),
+         so fill it rather than fixing a popup size. */
       body {
-        width: 320px;
+        max-width: 560px;
         margin: 0;
         padding: 14px;
         font: 13px/1.45 system-ui, -apple-system, Segoe UI, sans-serif;
@@ -60,7 +62,7 @@
       }
       #log {
         margin-top: 10px;
-        max-height: 110px;
+        max-height: 40vh;
         overflow-y: auto;
         font-size: 11px;
         font-family: ui-monospace, Consolas, monospace;
@@ -132,6 +134,7 @@
       <button id="stop">Stop</button>
       <button id="test" title="Send a test push">Test</button>
     </div>
+    <div class="hint" id="front"></div>
 
     <div class="status" id="status">…</div>
 

@@ -1286,7 +1286,7 @@ countdown is not a change, "COMING SOON" becoming "Buy" *is*, and
 
 ## 13. Test suite
 
-**206 tests, all passing** (`npm test`), 49 of them driving real headless
+**210 tests, all passing** (`npm test`), 49 of them driving real headless
 Chromium against real DOM.
 
 - `test/watcher.test.js` — 16, fake clock, no network
@@ -1308,8 +1308,11 @@ Chromium against real DOM.
   worker's fetch stubbed, so no request leaves the machine
 - `test/probe-dom.test.js` — 36, the DOM probe against a replica rebuilt from
   live dumps
-- `test/popup.test.js` — 7, the popup loaded in real Chrome. It exists because
-  a syntax error there shipped while 100 other tests passed
+- `test/popup.test.js` — 11, the popup loaded in real Chrome. It exists because
+  a syntax error there shipped while 100 other tests passed. Since 2026-10-05
+  `extension/` opens it as a **side panel** (it stays open while browsing), so
+  "Watch this tab" means whichever tab is in front; it shows that tab and only
+  arms a `/students/event/<season>/<item>` page
 - `test/push.test.js` — 16, the notification providers. Two pin that the link
   appears once: the body already ends with the order URL, so the click target
   is not appended after it again (Telegram and Discord render it inline; ntfy
