@@ -12,10 +12,15 @@
   "sessionCheckEveryPolls": 20,
   "claim": {
     "selector": "",
-    "allowText": "\\b(claim|accept)\\b",
-    "confirmText": "\\b(confirm|continue|submit|yes|complete|finish)\\b",
-    "successText": "(claimed|confirmed|you'?re going|see you|your ticket|success)",
-    "forbiddenText": "(purchase|buy|pay|checkout|price|\\$|credit card|transfer|resell|resale|sell|donate|renew)",
+    "allowText": "\\b(claim|accept|buy|purchase|checkout|order|get|select)\\b",
+    "moneyText": "\\b(buy|purchase|checkout|pay|payment|order|cart)\\b",
+    "forbiddenText": "(transfer|resell|resale|\\bsell\\b|donate|renew|upgrade|parking|merchandise|membership)",
+    "confirmText": "\\b(confirm|continue|submit|yes|complete|finish|place order|checkout)\\b",
+    "successText": "(claimed|confirmed|you'?re going|see you|your ticket|success|order complete)",
+    "requireZeroPrice": true,
+    "zeroPriceText": "\\b(free|no charge|complimentary|comp)\\b",
+    "priceAmount": "\\$\\s?\\d[\\d,]*(?:\\.\\d{2})?",
+    "priceScopeLevels": 4,
     "maxConfirmSteps": 3,
     "stepTimeoutMs": 4000
   }

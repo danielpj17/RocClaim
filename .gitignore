@@ -1,5 +1,7 @@
 node_modules/
 .browser-profile/
+.browser-profiles/
+.browser-profiles-demo/
 recon/
 recon-watch/
 config.local.json

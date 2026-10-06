@@ -1,4 +1,4 @@
-// One watch session: { event, stopAt }. Polls with jitter, detects
+// One watch session for one person: { person, event, stopAt }. Polls with jitter, detects
 // availability, claims once, notifies, and stops itself.
 //
 // `now` and `sleep` are injectable so the whole loop can be tested against a
@@ -15,8 +15,9 @@ const realSleep = (ms, signal) =>
   });
 
 class Watcher extends EventEmitter {
-  constructor({ site, config, event, stopAt, dryRun, notify, now = Date.now, sleep = realSleep }) {
+  constructor({ site, config, event, stopAt, dryRun, notify, person = null, now = Date.now, sleep = realSleep }) {
     super();
+    this.person = person;
     this.site = site;
     this.config = config;
     this.event = event;
@@ -39,6 +40,17 @@ class Watcher extends EventEmitter {
     this.emit('log', { at: new Date().toISOString(), level, message });
   }
 
+  // " for wife" in titles, so a push says whose account it touched.
+  forWho() {
+    return this.person ? ` for ${this.person}` : '';
+  }
+
+  loginHint() {
+    return this.person
+      ? `Run \`npm run login -- ${this.person}\` or use "Sign in again" in the panel.`
+      : 'Run `npm run login`.';
+  }
+
   pollDelay() {
     const { pollMinMs, pollMaxMs } = this.config;
     return Math.round(pollMinMs + Math.random() * (pollMaxMs - pollMinMs));
@@ -59,7 +71,7 @@ class Watcher extends EventEmitter {
     this.startedAt = this.now();
 
     const hours = (this.msLeft() / 3_600_000).toFixed(1);
-    this.log('info', `Watching "${this.event.name}" until ${new Date(this.stopAt).toLocaleString()} (${hours}h).`);
+    this.log('info', `Watching "${this.event.name}"${this.forWho()} until ${new Date(this.stopAt).toLocaleString()} (${hours}h).`);
     this.log(this.dryRun ? 'warn' : 'info',
       this.dryRun
         ? 'DRY RUN: a ticket will be detected and reported but NOT claimed.'
@@ -71,7 +83,7 @@ class Watcher extends EventEmitter {
       await this.site.open();
 
       if (!(await this.site.isSignedIn())) {
-        return this.finish('logged-out', 'Not signed in. Run `npm run login` and start again.');
+        return this.finish('logged-out', `${this.person || 'This login'} is not signed in. ${this.loginHint()}`);
       }
 
       while (true) {
@@ -91,7 +103,7 @@ class Watcher extends EventEmitter {
         } catch (err) {
           errors += 1;
           if (err.code === 'MAYBE_LOGGED_OUT') {
-            return this.finish('logged-out', `Session looks expired (${err.message}). Run \`npm run login\`.`);
+            return this.finish('logged-out', `Session${this.forWho()} looks expired (${err.message}). ${this.loginHint()}`);
           }
           this.log('warn', `Poll ${this.polls} failed (${errors} in a row): ${err.message}`);
           if (errors >= this.config.maxConsecutiveErrors) {
@@ -110,7 +122,7 @@ class Watcher extends EventEmitter {
           // this into thirty hours of politely polling a login page.
           if (this.polls % this.config.sessionCheckEveryPolls === 0) {
             if (!(await this.site.isSignedIn())) {
-              return this.finish('logged-out', 'Session expired mid-watch. Run `npm run login`.');
+              return this.finish('logged-out', `Session${this.forWho()} expired mid-watch. ${this.loginHint()}`);
             }
             this.log('info', 'Session still valid.');
           }
@@ -131,7 +143,7 @@ class Watcher extends EventEmitter {
 
         if (this.dryRun) {
           await this.notify({
-            title: 'ROC ticket available (dry run)',
+            title: `ROC ticket available${this.forWho()} (dry run)`,
             message:
               `A ticket appeared for ${this.event.name} and the watcher is in dry-run mode, so nothing was claimed. Go claim it yourself.\n\n` +
               `${claim.detail}`,
@@ -146,10 +158,12 @@ class Watcher extends EventEmitter {
           // a claim. Say so plainly rather than reporting a success we cannot see.
           const sure = claim.verified !== false;
           await this.notify({
-            title: sure ? 'ROC ticket CLAIMED' : 'ROC claim attempted -- CHECK YOUR ACCOUNT',
+            title: sure
+              ? `ROC ticket CLAIMED${this.forWho()}`
+              : `ROC claim attempted${this.forWho()} -- CHECK ${this.person ? `${this.person.toUpperCase()}'S` : 'YOUR'} ACCOUNT`,
             message:
               (sure
-                ? `Claimed a ticket for ${this.event.name}.`
+                ? `Claimed a ticket for ${this.event.name}${this.person ? ` on ${this.person}'s account` : ''}.`
                 : `Clicked through the claim for ${this.event.name}, but the page never confirmed it. Open your account and check whether you actually got it.`) +
               `\n\nIf your plans changed and you are not going, return the ticket. ` +
               `Claiming and then no-showing reduces your future ticket access.`,
@@ -181,7 +195,7 @@ class Watcher extends EventEmitter {
 
     if (outcome === 'logged-out' || outcome === 'error') {
       await this.notify({
-        title: 'ROC watcher stopped',
+        title: `ROC watcher stopped${this.forWho()}`,
         message,
         priority: 'high',
         tags: ['warning'],

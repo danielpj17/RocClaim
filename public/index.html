@@ -55,6 +55,32 @@
   .l-hit { color: var(--hit); font-weight: 700; }
   .note { font-size: 12px; color: var(--dim); margin-top: 10px; }
   .err { color: var(--err); font-size: 13px; min-height: 18px; margin-top: 10px; }
+  h2 { font-size: 14px; margin: 0 0 10px; color: var(--dim); font-weight: 600; }
+  .people { list-style: none; margin: 0 0 10px; padding: 0; }
+  .person { display: flex; align-items: center; gap: 6px; padding: 8px 0; border-bottom: 1px solid var(--line); }
+  .person:last-child { border-bottom: none; }
+  .person input { width: 16px; height: 16px; flex: none; }
+  .person .who { flex: 1; min-width: 0; }
+  .person .who b { display: block; }
+  .person .who span { font-size: 12px; color: var(--dim); }
+  .person .who span.bad { color: var(--warn); }
+  .person .n { width: 18px; text-align: center; color: var(--dim); font-size: 12px; flex: none; }
+  .mini { font-size: 12px; padding: 5px 8px; border-radius: 6px; border: 1px solid var(--line);
+    background: #0d1117; color: var(--dim); cursor: pointer; flex: none; font-family: inherit; }
+  .mini:hover:not(:disabled) { color: var(--text); border-color: #3d4653; }
+  .mini:disabled { opacity: .35; cursor: not-allowed; }
+  .mini.x:hover:not(:disabled) { color: var(--err); }
+  .add { display: flex; gap: 8px; }
+  .add input { flex: 1; min-width: 0; }
+  .banner { padding: 10px 12px; border-radius: 8px; border: 1px solid #6b5119; background: #2a2210;
+    font-size: 13px; display: flex; gap: 10px; align-items: center; margin-bottom: 10px; }
+  .banner span { flex: 1; }
+  .chips { display: flex; gap: 6px; flex-wrap: wrap; grid-column: 1 / -1; }
+  .chips:empty { display: none; }
+  .chip { font-size: 12px; padding: 2px 8px; border-radius: 999px; border: 1px solid var(--line); color: var(--dim); }
+  .chip.watching { color: #58a6ff; border-color: var(--accent); }
+  .chip.claimed { color: var(--ok); border-color: #1c6b30; }
+  .chip.logged-out, .chip.error { color: var(--err); border-color: #4a2326; }
 </style>
 </head>
 <body>
@@ -64,6 +90,21 @@
     <span class="badge" id="siteBadge">&hellip;</span>
     <span class="badge" id="notifyBadge">&hellip;</span>
   </header>
+
+  <div class="panel">
+    <h2>People, in claim order</h2>
+    <div class="banner" id="loginBanner" style="display:none">
+      <span id="loginText"></span>
+      <button class="mini" id="loginDone">Done</button>
+    </div>
+    <ul class="people" id="people"></ul>
+    <div class="add">
+      <input type="text" id="newName" placeholder="Add person (e.g. wife)" maxlength="32" autocomplete="off">
+      <button class="mini" id="addPerson">Add &amp; sign in</button>
+    </div>
+    <div class="note">Ticked people get one ticket each, top to bottom. Signing in opens a browser window on the
+      laptop, and they type their own password there. No passwords are stored here.</div>
+  </div>
 
   <div class="panel">
     <div class="row">
@@ -92,7 +133,7 @@
         <input type="checkbox" id="arm">
         <span class="t"><b>Arm the real claim</b>
           <span>Off = dry run: it detects a ticket and pushes your phone, but does not claim.
-          On = it claims the first ticket it sees, on your account, for real.</span></span>
+          On = it claims a real ticket for each ticked person, one after another.</span></span>
       </label>
     </div>
 
@@ -105,9 +146,11 @@
 
   <div class="panel status">
     <div><span>Status</span><b id="sStatus">idle</b></div>
+    <div><span>Watching for</span><b id="sPerson">&mdash;</b></div>
     <div><span>Polls</span><b id="sPolls">0</b></div>
     <div><span>Mode</span><b id="sMode">&mdash;</b></div>
     <div><span>Time left</span><b id="sLeft">&mdash;</b></div>
+    <div class="chips" id="chips"></div>
   </div>
 
   <div id="log"></div>
@@ -160,6 +203,121 @@ async function loadEvents() {
   }
 }
 
+let people = [];
+
+function ago(iso) {
+  if (!iso) return '';
+  const ms = Date.now() - Date.parse(iso);
+  const d = Math.floor(ms / 86400000), h = Math.floor(ms / 3600000), m = Math.floor(ms / 60000);
+  return d ? d + 'd ago' : h ? h + 'h ago' : m ? m + 'm ago' : 'just now';
+}
+
+function sessionNote(meta) {
+  if (!meta) return '<span class="bad">not signed in</span>';
+  if (meta.demo) return '<span>demo login</span>';
+  const signed = 'signed in ' + ago(meta.signedInAt);
+  if (!meta.siteCookies) return '<span class="bad">' + signed + ' &middot; nothing saved, sign in again</span>';
+  const until = meta.latestExpiry
+    ? ' &middot; cookies until ' + new Date(meta.latestExpiry).toLocaleDateString()
+    : ' &middot; session-only cookies';
+  return '<span>' + signed + until + '</span>';
+}
+
+function renderPeople() {
+  const busy = !!state.running;
+  const loginOpen = !!state.login;
+  const list = $('people');
+  if (!people.length) {
+    list.innerHTML = '<li class="note">Nobody saved yet. Add yourself first.</li>';
+    return;
+  }
+  let n = 0;
+  list.innerHTML = people.map((p, i) => {
+    const num = p.enabled ? ++n : '';
+    const cur = busy && state.person === p.name;
+    const dis = (c) => (c ? ' disabled' : '');
+    return '<li class="person">'
+      + '<span class="n">' + num + '</span>'
+      + '<input type="checkbox" data-act="toggle" data-i="' + i + '"' + (p.enabled ? ' checked' : '') + dis(busy) + ' title="Include in the next run">'
+      + '<span class="who"><b>' + esc(p.name) + '</b>' + sessionNote(p.meta) + '</span>'
+      + '<button class="mini" data-act="up" data-i="' + i + '"' + dis(busy || i === 0) + ' title="Move up">&uarr;</button>'
+      + '<button class="mini" data-act="down" data-i="' + i + '"' + dis(busy || i === people.length - 1) + ' title="Move down">&darr;</button>'
+      + '<button class="mini" data-act="login" data-i="' + i + '"' + dis(cur || loginOpen) + ' title="Open a sign-in window on the laptop">Sign in</button>'
+      + '<button class="mini x" data-act="remove" data-i="' + i + '"' + dis(busy || loginOpen) + ' title="Forget this login">&times;</button>'
+      + '</li>';
+  }).join('');
+}
+
+async function api(method, url, body) {
+  const r = await fetch(url, {
+    method,
+    headers: body ? { 'content-type': 'application/json' } : {},
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  const d = await r.json();
+  if (!r.ok) throw new Error(d.error || 'request failed');
+  return d;
+}
+
+async function loadPeople() {
+  try { people = (await api('GET', '/api/profiles')).profiles; } catch (e) { $('err').textContent = e.message; }
+  renderPeople();
+}
+
+async function saveOrder() {
+  try {
+    people = (await api('POST', '/api/profiles/order', {
+      order: people.map((p) => ({ name: p.name, enabled: p.enabled })),
+    })).profiles;
+  } catch (e) { $('err').textContent = e.message; await loadPeople(); }
+  renderPeople();
+}
+
+async function signIn(name) {
+  $('err').textContent = '';
+  try {
+    people = (await api('POST', '/api/login/start', { name })).profiles;
+    $('newName').value = '';
+    await refresh();
+  } catch (e) { $('err').textContent = e.message; }
+}
+
+$('people').addEventListener('click', async (ev) => {
+  const el = ev.target.closest('[data-act]');
+  if (!el || el.disabled) return;
+  const i = Number(el.dataset.i), p = people[i];
+  const act = el.dataset.act;
+  if (act === 'toggle') { p.enabled = el.checked; return saveOrder(); }
+  if (act === 'up' || act === 'down') {
+    const j = act === 'up' ? i - 1 : i + 1;
+    [people[i], people[j]] = [people[j], people[i]];
+    return saveOrder();
+  }
+  if (act === 'login') return signIn(p.name);
+  if (act === 'remove') {
+    if (!confirm('Forget ' + p.name + "'s saved login? They would have to sign in again to be added back.")) return;
+    try { people = (await api('DELETE', '/api/profiles/' + encodeURIComponent(p.name))).profiles; }
+    catch (e) { $('err').textContent = e.message; }
+    renderPeople();
+  }
+});
+
+$('addPerson').addEventListener('click', () => {
+  const name = $('newName').value.trim().toLowerCase();
+  if (!name) { $('err').textContent = 'Type a name first.'; return; }
+  signIn(name);
+});
+$('newName').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('addPerson').click(); });
+
+$('loginDone').addEventListener('click', async () => {
+  $('loginDone').disabled = true;
+  try { people = (await api('POST', '/api/login/finish')).profiles; }
+  catch (e) { $('err').textContent = e.message; }
+  $('loginDone').disabled = false;
+  await refresh();
+  if (!$('event').value) loadEvents();
+});
+
 function chosenEvent() {
   const opt = $('event').selectedOptions[0];
   if (opt && opt.value) return { id: opt.value, name: opt.dataset.name || opt.textContent };
@@ -174,6 +332,17 @@ function render() {
   $('notifyBadge').className = 'badge' + (state.notifyConfigured ? ' live' : '');
 
   $('sStatus').textContent = state.running ? 'watching' : (state.outcome || 'idle');
+  $('sPerson').textContent = state.running && state.person ? state.person : '—';
+  $('chips').innerHTML = (state.queue || []).length > 1
+    ? state.queue.map((q) => '<span class="chip ' + esc(q.state) + '">' + esc(q.name) + ': ' + esc(q.state) + '</span>').join('')
+    : '';
+
+  $('loginBanner').style.display = state.login ? 'flex' : 'none';
+  if (state.login) {
+    $('loginText').textContent = 'A sign-in window for ' + state.login.name
+      + ' is open on the laptop. Sign in there, then press Done (closing the window works too).';
+  }
+  $('addPerson').disabled = !!state.login;
   $('sPolls').textContent = state.polls || 0;
   $('sMode').textContent = state.running ? (state.dryRun ? 'dry run' : 'ARMED') : '—';
 
@@ -191,8 +360,15 @@ function render() {
   for (const el of ['event', 'eventManual', 'stopAt', 'arm']) $(el).disabled = !!state.running;
 }
 
+let lastLogin = null;
 async function refresh() {
-  try { state = await (await fetch('/api/status')).json(); render(); } catch (e) {}
+  try { state = await (await fetch('/api/status')).json(); } catch (e) { return; }
+  // The sign-in window may have been closed by hand; pick up the saved login.
+  const loginName = state.login ? state.login.name : null;
+  if (lastLogin && !loginName) await loadPeople();
+  lastLogin = loginName;
+  render();
+  renderPeople();
 }
 
 $('start').addEventListener('click', async () => {
@@ -200,7 +376,9 @@ $('start').addEventListener('click', async () => {
   const event = chosenEvent();
   if (!event) { $('err').textContent = 'Pick an event first.'; return; }
   if (!$('stopAt').value) { $('err').textContent = 'Set a stop time.'; return; }
-  const body = { event, stopAt: new Date($('stopAt').value).toISOString(), dryRun: !$('arm').checked };
+  const order = people.filter((p) => p.enabled).map((p) => p.name);
+  if (!order.length) { $('err').textContent = 'Tick at least one person.'; return; }
+  const body = { event, people: order, stopAt: new Date($('stopAt').value).toISOString(), dryRun: !$('arm').checked };
   const r = await fetch('/api/start', {
     method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
   });
@@ -230,7 +408,7 @@ es.onmessage = (m) => {
 };
 
 $('stopAt').value = toLocalInput(new Date(Date.now() + 2 * 3600 * 1000));
-loadEvents();
+loadPeople().then(loadEvents);
 refresh();
 setInterval(refresh, 2000);
 </script>

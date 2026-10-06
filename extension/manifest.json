@@ -1,0 +1,11 @@
+{
+  "manifest_version": 3,
+  "name": "ROC Claim",
+  "version": "1.0.0",
+  "description": "Pins the local ROC Claim control panel (localhost:4321) to Chrome's side panel.",
+  "permissions": ["sidePanel"],
+  "host_permissions": ["http://localhost:4321/*", "http://127.0.0.1:4321/*"],
+  "background": { "service_worker": "background.js" },
+  "side_panel": { "default_path": "panel.html" },
+  "action": { "default_title": "ROC Claim" }
+}

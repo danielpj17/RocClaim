@@ -1,6 +1,6 @@
 // Unattended recon recorder.
 //
-//   npm run record:watch
+//   npm run record:watch -- <name>
 //
 // The problem this solves: returned tickets get taken in seconds, so sitting
 // on the page waiting to screenshot an "available" state does not work. This
@@ -32,7 +32,10 @@ const { loadConfig } = require('./lib/config');
 const { makeNotifier } = require('./lib/notify');
 const { normalize, hash, jsonSignature } = require('./lib/fingerprint');
 
-const PROFILE_DIR = path.join(__dirname, '.browser-profile');
+// Whose login to record with: npm run record -- <name>. Optional if only one
+// person is saved.
+const profiles = require('./lib/profiles').createProfileStore();
+const PROFILE_DIR = profiles.dir(profiles.resolveArg(process.argv[2]));
 const START_URL = 'https://byutickets.com';
 const MAX_BODY = 200_000;
 const MAX_SAVED_CHANGES = 60;

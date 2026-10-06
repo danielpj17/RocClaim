@@ -95,18 +95,149 @@ test('DRY RUN reports the exact element but never clicks', async () => {
   assert.deepEqual(clicks, [], 'dry run must not click anything');
 });
 
-// The safety rail. Each of these must abort with nothing clicked.
-test('refuses anything that looks like it costs money or moves a ticket', async () => {
-  for (const label of ['Purchase Ticket', 'Buy Now', 'Claim for $15.00', 'Accept Transfer', 'Claim and pay']) {
+// THE SAFETY RAIL. The real ROC flow says "Buy Now" at $0.00, so purchase
+// wording alone must not block a claim -- but a real price must.
+test('claims a $0.00 "Buy Now", which is what the real ROC flow looks like', async () => {
+  const r = await run(page(`
+    <div class="ticket">
+      <h2>Women's Volleyball vs. Utah</h2>
+      <span class="price">$0.00</span>
+      <button onclick="document.body.innerHTML='<h1>Ticket claimed</h1>'">Buy Now</button>
+    </div>`));
+  assert.equal(r.ok, true, r.detail);
+  assert.deepEqual(clicks, ['Buy Now']);
+});
+
+test('claims a "Purchase" control marked Free', async () => {
+  const r = await run(page(`
+    <div><span>Free</span>
+    <button onclick="document.body.innerHTML='<h1>claimed</h1>'">Purchase</button></div>`));
+  assert.equal(r.ok, true, r.detail);
+  assert.deepEqual(clicks, ['Purchase']);
+});
+
+test('REFUSES a Buy Now at a real price', async () => {
+  for (const price of ['$45.00', '$15', '$1,250.00', '$0.50']) {
+    const r = await run(page(`<div><span>${price}</span><button>Buy Now</button></div>`));
+    assert.equal(r.ok, false, `should have refused at ${price}`);
+    assert.equal(r.aborted, true);
+    assert.deepEqual(clicks, [], `must not click at ${price}`);
+    assert.match(r.detail, /nonzero price/i);
+  }
+});
+
+test('REFUSES purchase wording when no price is shown at all', async () => {
+  // Not finding a price is not proof that it is free. Fails closed.
+  for (const label of ['Purchase Ticket', 'Buy Now', 'Checkout', 'Pay']) {
     const r = await run(page(`<button>${label}</button>`));
-    assert.equal(r.ok, false, `should not have claimed via "${label}"`);
+    assert.equal(r.ok, false, `should have refused "${label}" with no price`);
     assert.deepEqual(clicks, [], `must not click "${label}"`);
   }
 });
 
+test('a plain Claim button still works with no price anywhere on the page', async () => {
+  // Neutral wording only has to not show a nonzero price, or a page that lists
+  // no prices would be unclickable.
+  const r = await run(page(`<button onclick="document.body.innerHTML='<h1>claimed</h1>'">Claim Ticket</button>`));
+  assert.equal(r.ok, true, r.detail);
+});
+
+test('a nonzero price refuses even a neutrally worded Claim button', async () => {
+  const r = await run(page('<div><span>$30.00</span><button>Claim Ticket</button></div>'));
+  assert.equal(r.ok, false);
+  assert.deepEqual(clicks, []);
+});
+
+test('nearest price wins: $0.00 beside the button beats a face value further up', async () => {
+  const r = await run(page(`
+    <div class="page">
+      <p>Face value $45.00</p>
+      <div class="row">
+        <span>$0.00</span>
+        <button onclick="document.body.innerHTML='<h1>claimed</h1>'">Buy Now</button>
+      </div>
+    </div>`));
+  assert.equal(r.ok, true, r.detail);
+  assert.deepEqual(clicks, ['Buy Now']);
+});
+
+test('nearest price wins the other way: a $25 row is refused despite a Free banner above', async () => {
+  const r = await run(page(`
+    <div class="page">
+      <p>ROC tickets are Free</p>
+      <div class="row"><span>$25.00</span><button>Buy Now</button></div>
+    </div>`));
+  assert.equal(r.ok, false);
+  assert.deepEqual(clicks, []);
+});
+
+test('transfer and resale are refused outright even at $0.00', async () => {
+  for (const label of ['Accept Transfer', 'Resell Ticket', 'Transfer to a friend']) {
+    const r = await run(page(`<div><span>$0.00</span><button>${label}</button></div>`));
+    assert.equal(r.ok, false, `should have refused "${label}"`);
+    assert.deepEqual(clicks, [], `must not click "${label}"`);
+  }
+});
+
+test('a price appearing only on the confirmation page still aborts', async () => {
+  const r = await run(page(`
+    <div><span>$0.00</span>
+    <button onclick="document.body.innerHTML='<div><h2>Order summary</h2><p>Total: $35.00</p><button>Confirm</button></div>'">Buy Now</button></div>`));
+  assert.equal(r.ok, false, 'must not confirm an order that turned out to cost money');
+  assert.equal(r.aborted, true);
+  assert.deepEqual(clicks, ['Buy Now'], 'the first click happened; the confirm must not');
+  assert.match(r.detail, /CHECK YOUR ACCOUNT/);
+});
+
+test('a $0.00 confirmation page completes normally', async () => {
+  const r = await run(page(`
+    <div class="row"><span>$0.00</span><button id="buy">Buy Now</button></div>
+    <script>
+      document.getElementById('buy').onclick = () => {
+        document.body.innerHTML = '<div class="row"><p>Total: $0.00</p><button id="c">Confirm</button></div>';
+        document.getElementById('c').onclick = () => { document.body.innerHTML = '<h1>Order complete</h1>'; };
+      };
+    </script>`));
+  assert.equal(r.ok, true, r.detail);
+  assert.equal(r.verified, true);
+  assert.deepEqual(clicks, ['Buy Now', 'Confirm']);
+});
+
+// The scope stop exists so a price belonging to a DIFFERENT row cannot veto
+// this one. A real claim page is a list of events at various prices.
+test("another row's price does not veto this row", async () => {
+  const r = await run(page(`
+    <div class="list">
+      <div class="row"><span>Football vs. Utah State</span><span>$45.00</span><button>Buy Now</button></div>
+      <div class="row"><span>Volleyball vs. Utah</span><span>$0.00</span>
+        <button onclick="document.body.innerHTML='<h1>Ticket claimed</h1>'">Buy Now</button></div>
+    </div>`));
+  assert.equal(r.ok, false, 'the $45 row comes first and must be refused, not silently skipped');
+  assert.deepEqual(clicks, []);
+});
+
+// Deliberate semantics: if the BEST-matching control is unsafe, refuse the run
+// rather than hunting for some other button that would pass. The watcher aims
+// at one event on that event's page; shopping around for a clickable
+// alternative is how you claim the wrong game.
+test('refuses rather than shopping for a safer control when the top match is paid', async () => {
+  const r = await run(page(`
+    <div class="list">
+      <div class="row"><span>Parking</span><span>$15.00</span><button>Buy Now</button></div>
+      <div class="row"><span>Volleyball vs. Utah</span>
+        <button onclick="document.body.innerHTML='<h1>Ticket claimed</h1>'">Claim Ticket</button></div>
+    </div>`));
+  assert.equal(r.ok, false);
+  assert.equal(r.aborted, true);
+  assert.deepEqual(clicks, [], 'nothing at all should be clicked');
+  assert.match(r.detail, /nonzero price/i);
+});
+
+// ...but a control whose own LABEL is forbidden is filtered out before
+// selection, so it never becomes the top match in the first place.
 test('a forbidden control does not block a legitimate one elsewhere on the page', async () => {
   const r = await run(page(`
-    <button>Purchase Parking Pass</button>
+    <button>Purchase Parking Pass $15.00</button>
     <button onclick="document.body.innerHTML='<h1>Ticket claimed</h1>'">Claim Ticket</button>`));
   assert.equal(r.ok, true);
   assert.deepEqual(clicks, ['Claim Ticket']);
@@ -139,7 +270,7 @@ test('a configured selector takes precedence over text matching', async () => {
 });
 
 test('a configured selector is still subject to the money check', async () => {
-  const r = await run(page('<button id="real">Purchase</button>'),
+  const r = await run(page('<div><span>$40.00</span><button id="real">Purchase</button></div>'),
     { config: { ...config, claim: { ...config.claim, selector: '#real' } } });
   assert.equal(r.ok, false);
   assert.equal(r.aborted, true);

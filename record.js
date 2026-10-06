@@ -1,7 +1,7 @@
 // Recon recorder. Opens your signed-in browser, records every network call and
 // the final HTML of every page you visit, then writes it all to ./recon/<stamp>/.
 //
-//   npm run record
+//   npm run record -- <name>
 //
 // What to do while it is running:
 //   1. Navigate to the ROC ticket claim area exactly as you normally would.
@@ -17,7 +17,10 @@ const fs = require('fs');
 const path = require('path');
 const readline = require('readline');
 
-const PROFILE_DIR = path.join(__dirname, '.browser-profile');
+// Whose login to record with: npm run record -- <name>. Optional if only one
+// person is saved.
+const profiles = require('./lib/profiles').createProfileStore();
+const PROFILE_DIR = profiles.dir(profiles.resolveArg(process.argv[2]));
 const START_URL = 'https://byutickets.com';
 const MAX_BODY = 200_000;
 

@@ -10,18 +10,29 @@
 //   - It reads every candidate control in one batched evaluate.
 //   - Timeouts are short. If a step stalls, the ticket is gone anyway.
 //
-// Safety, because this clicks buttons on a real account:
+// SAFETY -- read this before changing any of it.
 //
-//   - Allowlist only. A control is clicked only if its label matches
-//     claim.allowText. Nothing is clicked speculatively.
-//   - A forbidden-label check that aborts outright. ROC claims are free, so
-//     anything reading "purchase", "pay", "checkout" or "$" means we are on
-//     the wrong page or the wrong flow, and the right move is to stop rather
-//     than find out what it does. Transfer and resale are on that list too:
-//     ROC rules prohibit both and doing it can get the pass revoked.
-//   - One claim per run, quantity untouched.
-//   - Dry run reports the exact element it WOULD have clicked, including its
-//     text and selector, without clicking. That is how the claim path gets
+// The real ROC flow uses purchase wording ("Buy Now") even though a ROC claim
+// is always $0.00. So refusing purchase wording outright would block every
+// legitimate claim. The rule is therefore not "never click Buy", it is:
+//
+//     never click Buy unless the page proves the price is zero.
+//
+//   - Allowlist. A control is clicked only if its label matches allowText.
+//     Nothing is clicked speculatively.
+//   - Money wording (buy / purchase / checkout / pay / order) REQUIRES a
+//     visible $0.00 or "Free" near the control. No price found means refuse.
+//     This fails closed on purpose: not finding a price is not proof of zero.
+//   - Any NONZERO price near the control refuses, whatever the label says.
+//   - Transfer and resale are refused outright regardless of price. ROC rules
+//     prohibit both and doing it can get the pass revoked.
+//   - Nearest price wins. A "$45.00 face value" further up the page does not
+//     veto a "$0.00" right next to the button.
+//   - Every check runs again on each confirm step, so a total that appears
+//     only on the confirmation page still aborts -- after the first click, but
+//     before completing the order.
+//   - Dry run reports the exact element it WOULD have clicked, with the price
+//     evidence it found, without clicking. That is how the claim path gets
 //     validated against a real ticket without spending one.
 
 const CANDIDATES = 'button, a, input[type=submit], input[type=button], [role="button"]';
@@ -60,6 +71,31 @@ function describeOne(el) {
   };
 }
 
+// The control's own text, then each ancestor's, innermost first. The nearest
+// ring that mentions a price is the one we judge on.
+//
+// The walk stops at the first ancestor containing another clickable control,
+// because that ancestor is the LIST, not this ticket's row. Without that stop
+// it climbs to <body> and any price anywhere on the page -- a $15 parking pass,
+// another event in the list -- vetoes a legitimate $0.00 claim.
+//
+// The stop errs toward finding no price rather than someone else's price, and
+// no price means a purchase control is refused for want of proof. So a scope
+// that is too tight fails closed, which is the direction we want.
+function priceScope(el, levels) {
+  const SEL = 'button, a, input[type=submit], input[type=button], [role="button"]';
+  const text = (n) => (n.innerText || n.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 400);
+
+  const out = [text(el)];
+  let node = el;
+  for (let i = 0; i < levels && node.parentElement; i++) {
+    node = node.parentElement;
+    if (node.querySelectorAll(SEL).length > 1) break;
+    out.push(text(node));
+  }
+  return out;
+}
+
 function labelOf(c) {
   return [c.text, c.value, c.aria, c.title].filter(Boolean).join(' ').trim();
 }
@@ -73,41 +109,38 @@ function rx(pattern) {
   return pattern instanceof RegExp ? pattern : new RegExp(pattern, 'i');
 }
 
-async function describeControls(page) {
-  const els = await page.$$(CANDIDATES);
-  if (!els.length) return { els, info: [] };
-  const info = await page.$$eval(CANDIDATES, describeAll);
-  // The two queries are microseconds apart, but if the DOM shifted between
-  // them the indices no longer line up and clicking by index would be a guess.
-  if (info.length !== els.length) return { els, info: [], desynced: true };
-  return { els, info };
+// Judge one ring of context. Returns 'zero' | 'nonzero' | 'none'.
+function priceVerdict(text, rules) {
+  const amounts = text.match(new RegExp(rules.priceAmount.source, 'gi')) || [];
+  const values = amounts.map((a) => parseFloat(a.replace(/[^0-9.]/g, '')) || 0);
+
+  if (values.some((v) => v > 0)) return { verdict: 'nonzero', evidence: amounts.filter((a, i) => values[i] > 0).join(', ') };
+  if (values.length) return { verdict: 'zero', evidence: amounts.join(', ') };
+  if (rules.zeroPriceText.test(text)) return { verdict: 'zero', evidence: (text.match(rules.zeroPriceText) || [])[0] };
+  return { verdict: 'none' };
 }
 
-// Last line of defence, run against the live element immediately before the
-// click: the label still has to pass the allowlist and still has to not look
-// like a purchase. Catches a page that re-rendered underneath us between the
-// scan and the click.
-async function clickChecked(handle, control, { allow, forbid, timeout }) {
-  const live = await handle.evaluate(describeOne).catch(() => null);
-  if (!live) return { clicked: false, reason: 'element vanished before the click' };
+// Walk outward from the control until a ring mentions a price at all. That
+// ring decides. A face value elsewhere on the page does not veto a $0.00 sitting
+// right next to the button, and vice versa.
+async function assertFree(handle, rules) {
+  const scopes = await handle.evaluate(priceScope, rules.priceScopeLevels).catch(() => null);
+  if (!scopes) return { ok: false, reason: 'could not read the price context' };
 
-  const label = labelOf(live);
-  if (!label || !allow.test(label)) {
-    return { clicked: false, reason: `element changed under us: now reads "${label || '(no label)'}"` };
+  for (const text of scopes) {
+    const { verdict, evidence } = priceVerdict(text, rules);
+    if (verdict === 'nonzero') {
+      return { ok: false, nonzero: true, reason: `a nonzero price (${evidence}) is shown with this control`, evidence };
+    }
+    if (verdict === 'zero') {
+      return { ok: true, evidence };
+    }
   }
-  if (forbid.test(label)) {
-    return { clicked: false, reason: `element now reads "${label}", which looks like a purchase or transfer` };
-  }
-  if (live.disabled || !live.visible) {
-    return { clicked: false, reason: 'element became hidden or disabled' };
-  }
-
-  await handle.click({ timeout });
-  return { clicked: true, control: live };
+  return { ok: false, reason: 'no price shown anywhere near this control, so $0.00 could not be confirmed' };
 }
 
 // Find a clickable control whose label matches `allow` and does not match
-// `forbid`. Returns { handle, control } or { blocked } or null.
+// `forbid`. Returns { control } or { blocked } or null.
 function pick(info, allow, forbid) {
   const usable = info.filter((c) => c.visible && !c.disabled && labelOf(c));
   const matches = usable.filter((c) => allow.test(labelOf(c)));
@@ -118,33 +151,98 @@ function pick(info, allow, forbid) {
   return { control: safe[0] };
 }
 
+async function describeControls(page) {
+  const els = await page.$$(CANDIDATES);
+  if (!els.length) return { els, info: [] };
+  const info = await page.$$eval(CANDIDATES, describeAll);
+  // The two queries are microseconds apart, but if the DOM shifted between
+  // them the indices no longer line up and clicking by index would be a guess.
+  if (info.length !== els.length) return { els, info: [], desynced: true };
+  return { els, info };
+}
+
+// Everything that has to be true before a click happens. Re-read from the live
+// element rather than the earlier scan, so a page that re-rendered underneath
+// us cannot slip a different button into the same slot.
+async function vet(handle, rules, allow) {
+  const live = await handle.evaluate(describeOne).catch(() => null);
+  if (!live) return { ok: false, reason: 'element vanished before the click' };
+
+  const label = labelOf(live);
+  if (!label || !allow.test(label)) {
+    return { ok: false, reason: `element changed under us: now reads "${label || '(no label)'}"` };
+  }
+  if (rules.forbiddenText.test(label)) {
+    return { ok: false, reason: `"${label}" is a transfer, resale or non-ticket control` };
+  }
+  if (live.disabled || !live.visible) {
+    return { ok: false, reason: 'element became hidden or disabled' };
+  }
+
+  const money = rules.moneyText.test(label);
+  const price = await assertFree(handle, rules);
+
+  // Money wording demands proof of zero. Neutral wording only has to not show
+  // a nonzero price -- otherwise a plain "Claim" button on a page that lists
+  // no prices at all would be unclickable.
+  if (price.nonzero) {
+    return { ok: false, reason: `refusing "${label}": ${price.reason}`, live };
+  }
+  if (money && rules.requireZeroPrice && !price.ok) {
+    return { ok: false, reason: `refusing "${label}": it is a purchase control and ${price.reason}`, live };
+  }
+
+  return { ok: true, live, price };
+}
+
 async function performClaim({ page, config, log, dryRun = true, event }) {
-  const rules = (config && config.claim) || {};
-  const allow = rx(rules.allowText || '\\b(claim|accept)\\b');
-  const confirm = rx(rules.confirmText || '\\b(confirm|continue|submit|yes|complete|finish)\\b');
-  const success = rx(rules.successText || '(claimed|confirmed|you\'?re going|see you|your ticket|success)');
-  const forbid = rx(rules.forbiddenText || '(purchase|buy|pay|checkout|price|\\$|credit card|transfer|resell|resale|sell|donate|renew)');
-  const maxConfirmSteps = rules.maxConfirmSteps ?? 3;
-  const stepTimeoutMs = rules.stepTimeoutMs ?? 4000;
+  const r = (config && config.claim) || {};
+  const rules = {
+    allowText: rx(r.allowText || '\\b(claim|accept|buy|purchase|checkout|order|get|select)\\b'),
+    moneyText: rx(r.moneyText || '\\b(buy|purchase|checkout|pay|payment|order|cart)\\b'),
+    forbiddenText: rx(r.forbiddenText || '(transfer|resell|resale|\\bsell\\b|donate|renew|upgrade|parking|merchandise|membership)'),
+    confirmText: rx(r.confirmText || '\\b(confirm|continue|submit|yes|complete|finish|place order|checkout)\\b'),
+    successText: rx(r.successText || '(claimed|confirmed|you\'?re going|see you|your ticket|success|order complete)'),
+    zeroPriceText: rx(r.zeroPriceText || '\\b(free|no charge|complimentary|comp)\\b'),
+    priceAmount: rx(r.priceAmount || '\\$\\s?\\d[\\d,]*(?:\\.\\d{2})?'),
+    requireZeroPrice: r.requireZeroPrice !== false,
+    priceScopeLevels: r.priceScopeLevels ?? 4,
+  };
+  const maxConfirmSteps = r.maxConfirmSteps ?? 3;
+  const stepTimeoutMs = r.stepTimeoutMs ?? 4000;
 
   const started = Date.now();
   const ms = () => Date.now() - started;
   const steps = [];
+  let clickedAnything = false;
+
+  async function attempt(handle, control, allow, what) {
+    const check = await vet(handle, rules, allow);
+    if (!check.ok) return { ok: false, reason: check.reason };
+
+    const priceNote = check.price && check.price.evidence ? ` [price: ${check.price.evidence}]` : '';
+    if (dryRun) {
+      return { ok: false, dryRun: true, note: `${describe(control)}${priceNote}` };
+    }
+    await handle.click({ timeout: stepTimeoutMs });
+    clickedAnything = true;
+    steps.push(`${what} ${describe(control)}${priceNote}`);
+    log && log('info', `${what} at +${ms()}ms: ${describe(control)}${priceNote}`);
+    return { ok: true };
+  }
 
   // Explicit selector from recon wins. Everything else is a fallback.
-  if (rules.selector) {
-    const el = await page.$(rules.selector);
+  if (r.selector) {
+    const el = await page.$(r.selector);
     if (el) {
       const c = await el.evaluate(describeOne);
-      if (forbid.test(labelOf(c))) {
-        return { ok: false, aborted: true, ms: ms(), detail: `Refused: configured selector points at ${describe(c)}, which looks like a purchase or transfer control.` };
+      const res = await attempt(el, c, rules.allowText, 'clicked');
+      if (res.dryRun) {
+        return { ok: false, dryRun: true, ms: ms(), detail: `DRY RUN: would have clicked ${res.note} (from claim.selector). Nothing was clicked.` };
       }
-      if (dryRun) {
-        return { ok: false, dryRun: true, ms: ms(), detail: `DRY RUN: would have clicked ${describe(c)} (from claim.selector).` };
+      if (!res.ok) {
+        return { ok: false, aborted: true, ms: ms(), detail: `Refused: configured selector -- ${res.reason}` };
       }
-      await el.click({ timeout: stepTimeoutMs });
-      steps.push(`clicked ${describe(c)}`);
-      log && log('info', `Claim click at +${ms()}ms: ${describe(c)} (from claim.selector)`);
     }
   }
 
@@ -153,58 +251,58 @@ async function performClaim({ page, config, log, dryRun = true, event }) {
     if (desynced) {
       return { ok: false, ms: ms(), detail: 'The page re-rendered mid-scan. Nothing was clicked; the next poll will retry.' };
     }
-    const found = pick(info, allow, forbid);
+    const found = pick(info, rules.allowText, rules.forbiddenText);
 
     if (!found) {
       const seen = info.filter((c) => c.visible && labelOf(c)).map(labelOf).slice(0, 12);
-      return {
-        ok: false, ms: ms(),
-        detail: `No claim control found. Visible controls were: ${seen.join(' | ') || '(none)'}`,
-      };
+      return { ok: false, ms: ms(), detail: `No claim control found. Visible controls were: ${seen.join(' | ') || '(none)'}` };
     }
-
     if (found.blocked) {
       return {
         ok: false, aborted: true, ms: ms(),
-        detail: `Refused to click ${describe(found.blocked)} -- it matched the claim wording but also looks like a purchase or transfer. Nothing was clicked.`,
+        detail: `Refused to click ${describe(found.blocked)} -- it is a transfer, resale or non-ticket control. Nothing was clicked.`,
       };
     }
 
-    const c = found.control;
-    if (dryRun) {
-      return { ok: false, dryRun: true, ms: ms(), detail: `DRY RUN: would have clicked ${describe(c)}. Nothing was clicked.` };
+    const res = await attempt(els[found.control.i], found.control, rules.allowText, 'clicked');
+    if (res.dryRun) {
+      return { ok: false, dryRun: true, ms: ms(), detail: `DRY RUN: would have clicked ${res.note}. Nothing was clicked.` };
     }
-
-    const clicked = await clickChecked(els[c.i], c, { allow, forbid, timeout: stepTimeoutMs });
-    if (!clicked.clicked) {
-      return { ok: false, ms: ms(), detail: `Did not click: ${clicked.reason}. Nothing was clicked; the next poll will retry.` };
+    if (!res.ok) {
+      return { ok: false, aborted: true, ms: ms(), detail: `Refused to click: ${res.reason}. Nothing was clicked.` };
     }
-    steps.push(`clicked ${describe(c)}`);
-    log && log('info', `Claim click at +${ms()}ms: ${describe(c)}`);
   }
 
-  // Multi-step flows: a confirm dialog, a terms checkbox, an "are you sure".
+  // Multi-step flows: a confirm dialog, a terms checkbox, an "are you sure",
+  // an order summary. The price check runs again on every one of them, because
+  // the total is often only shown on the last screen.
   for (let step = 0; step < maxConfirmSteps; step++) {
     await page.waitForLoadState('domcontentloaded', { timeout: stepTimeoutMs }).catch(() => {});
 
     const body = await page.evaluate(() => document.body.innerText).catch(() => '');
-    if (success.test(body)) {
+    if (rules.successText.test(body)) {
       return { ok: true, verified: true, ms: ms(), detail: `Claimed in ${ms()}ms. Steps: ${steps.join(' -> ')}` };
     }
 
     const { els, info, desynced } = await describeControls(page);
     if (desynced) continue;
-    const next = pick(info, confirm, forbid);
+    const next = pick(info, rules.confirmText, rules.forbiddenText);
     if (!next || next.blocked) break;
 
-    const clicked = await clickChecked(els[next.control.i], next.control, { allow: confirm, forbid, timeout: stepTimeoutMs });
-    if (!clicked.clicked) break;
-    steps.push(`confirmed via ${describe(next.control)}`);
-    log && log('info', `Confirm step at +${ms()}ms: ${describe(next.control)}`);
+    const res = await attempt(els[next.control.i], next.control, rules.confirmText, 'confirmed via');
+    if (!res.ok) {
+      // Already clicked once and now something is wrong. Stop rather than
+      // push through, and be explicit that an order may be half-finished.
+      return {
+        ok: false, aborted: true, ms: ms(),
+        detail: `Stopped partway: ${res.reason}. Steps completed: ${steps.join(' -> ') || '(none)'}. ` +
+          `${clickedAnything ? 'A click already went through -- CHECK YOUR ACCOUNT for an incomplete order.' : 'Nothing was clicked.'}`,
+      };
+    }
   }
 
   const body = await page.evaluate(() => document.body.innerText).catch(() => '');
-  if (success.test(body)) {
+  if (rules.successText.test(body)) {
     return { ok: true, verified: true, ms: ms(), detail: `Claimed in ${ms()}ms. Steps: ${steps.join(' -> ')}` };
   }
 
@@ -218,4 +316,4 @@ async function performClaim({ page, config, log, dryRun = true, event }) {
   };
 }
 
-module.exports = { performClaim, pick, labelOf, describe, CANDIDATES, describeAll, describeOne };
+module.exports = { performClaim, pick, labelOf, describe, priceVerdict, CANDIDATES, describeAll, describeOne };

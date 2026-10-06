@@ -66,8 +66,9 @@ logged-in BYU Tickets session. It cannot be deployed — not Vercel, not any
 host. The session lives on his machine. He deploys most of his projects to
 Vercel, so this exception is worth restating if it comes up.
 
-**Never handle his password.** `login.js` opens a browser window and he types
-it himself. Only the resulting session cookies are kept, in `.browser-profile/`
+**Never handle his password -- or anyone's.** `login.js` (or "Add person" in
+the UI) opens a browser window and the person types it themselves. Only the
+resulting session cookies are kept, in `.browser-profiles/<name>/`
 (git-ignored). Do not add credential storage, a `.env` password, or an
 auto-login typing flow. This is a firm boundary, not a default.
 
@@ -107,7 +108,14 @@ package.json   deps: playwright (only)
 config.json    poll window, port, notify server -- checked in, no secrets
 config.local.json          git-ignored overrides; the ntfy topic goes here
 config.local.example.json  copy it to the above
-login.js       DONE -- persistent-profile manual login
+login.js       DONE -- persistent-profile manual login, one per person:
+               npm run login -- <name>
+lib/profiles.js      DONE -- saved logins under .browser-profiles/<name>/,
+                     queue order + on/off in order.json
+lib/login-session.js DONE -- the sign-in window + post-restart cookie check,
+                     shared by login.js and the UI's "Add person"
+queue.js       DONE -- one Watcher per person, back to back, shared hard stop
+extension/     DONE -- Chrome side-panel wrapper around localhost:4321
 record.js      DONE -- recon recorder, dumps network + HTML to recon/<stamp>/
 record-watch.js   DONE -- unattended recon: polls a claim page, archives any
                   poll that differs from baseline, pushes on change
@@ -124,7 +132,9 @@ claim.js       DONE -- the claim transaction: finds the control by label
 public/index.html DONE -- picker, stop time, arm switch, Start/Stop, live log
 test/watcher.test.js      DONE -- 13 tests, fake clock, no network
 test/fingerprint.test.js  DONE -- 11 tests pinning what counts as a change
-test/claim.test.js        DONE -- 13 tests, real Chromium, real clicks
+test/claim.test.js        DONE -- 25 tests, real Chromium, real clicks
+test/queue.test.js        DONE -- 10 tests, multi-person queue
+test/profiles.test.js     DONE -- 6 tests, saved-login store
 ```
 
 - [x] `login.js`
@@ -139,7 +149,7 @@ test/claim.test.js        DONE -- 13 tests, real Chromium, real clicks
 - [ ] **Pointing the claim at the real page -- needs the same recon dump**
 
 `npm install` and `npx playwright install chromium` have both been run on this
-machine. `npm test` passes (42 tests, 13 of them driving real headless Chromium). `npm run demo` was driven end to end
+machine. `npm test` passes (70 tests, 25 of them driving real headless Chromium). `npm run demo` was driven end to end
 against the fake site: start rejections, double-start, SSE log, armed claim,
 notification text. None of it has touched BYU yet.
 
@@ -202,13 +212,37 @@ confirm step; a test pins that.
 **An allowlist, never a guess.** A control is clicked only if its label matches
 `claim.allowText`. Nothing is clicked speculatively.
 
-**A refusal list that aborts.** ROC claims are free, so a control reading
-"purchase", "buy", "pay", "checkout" or "$" means we are in the wrong flow, and
-the right move is to stop rather than find out what it does. "Transfer",
-"resell" and "resale" are on that list too -- ROC rules prohibit both and doing
-it can get the pass revoked. The check runs twice: once when scanning, and
-again against the live element immediately before the click, which catches a
-page that re-rendered underneath us.
+**A price assertion, not a wording ban.** Corrected 2026-09-04: Daniel says the
+real ROC flow says "Buy Now" even though a ROC claim is always $0.00. An
+outright ban on purchase wording would have blocked every legitimate claim he
+has. So the rule is not "never click Buy", it is *never click Buy unless the
+page proves the price is zero*:
+
+- Money wording (buy / purchase / checkout / pay / order) REQUIRES a visible
+  $0.00 or "Free" near the control. No price found means refuse -- not finding
+  a price is not proof of zero, so it fails closed.
+- Any NONZERO price near the control refuses, whatever the label says.
+- Neutral wording ("Claim", "Accept") only has to not show a nonzero price,
+  otherwise a page that lists no prices would be unclickable.
+- Transfer and resale are still refused outright at any price. ROC prohibits
+  both and it can get the pass revoked.
+
+**Price scope is this ticket's row, not the page.** The walk up the DOM stops
+at the first ancestor holding another clickable control, because that ancestor
+is the list rather than this row. Without that stop it climbs to `<body>` and a
+$15 parking pass elsewhere vetoes a legitimate $0.00 claim. The stop errs
+toward finding no price rather than someone else's price, and no price means a
+purchase control is refused -- so a too-tight scope fails closed.
+
+**If the top candidate is unsafe, the run refuses rather than hunting for a
+safer button.** The watcher aims at one event on that event's page; shopping
+around for a clickable alternative is how you claim the wrong game.
+
+Every check runs again on each confirm step, so a total that only appears on
+the confirmation screen still aborts -- after the first click but before the
+order completes, and the report says so plainly. The checks also re-read the
+live element immediately before clicking, which catches a page that re-rendered
+underneath us.
 
 It also solves the "the claim path is untestable" problem from section 10.
 **Dry run now walks the whole claim path and stops at the click**, reporting
@@ -221,6 +255,59 @@ before arming.
 One honest gap: if the page never confirms success, the result is reported as
 `verified: false` and the push says CHECK YOUR ACCOUNT rather than claiming a
 success we cannot see.
+
+### Multiple people, back to back (2026-10-05)
+
+Daniel asked to claim for himself, then his wife, then others, one after
+another. He floated keeping a list of usernames and passwords. **No** -- section
+4 holds for every account, not just his. Instead each person has their own
+Chromium profile folder, signed into once by hand, and `queue.js` runs one
+`Watcher` per person in the order set in the UI.
+
+Decisions worth keeping:
+
+- **One person at a time, never in parallel.** Watching N accounts at once is
+  N times the request rate from one IP, which section 5 forbids.
+- **One hard stop for the whole queue**, not per person.
+- claimed -> next person; logged-out -> skip with a push; dry-run-hit, error,
+  stop-time, stop -> end the queue. A safety abort is about the page, so the
+  next account would hit it too.
+- Each person needs their own ROC pass. Never claim on one account for
+  another person -- non-transferable.
+- **Session lifetime is unknown.** The old `.browser-profile/` had zero
+  cookies in it, so no login had ever been saved. Sign-in now reopens the
+  profile from cold and records which BYU cookies survived and when they
+  expire (names and dates only), and the UI shows it. If eVenue turns out to
+  use session-only cookies, a persistent profile drops them on close and
+  logins will not stick -- that check is how we will find out.
+- The demo (`npm run demo`) uses a separate `.browser-profiles-demo/` with
+  pretend people and never opens a sign-in window. It does use the real ntfy
+  topic, so demo pushes reach his phone.
+- The People panel's "Sign in" opens a window **on the laptop**. From his
+  phone, the way to type into it is Chrome Remote Desktop. Do not build a
+  remote password field into the UI to "fix" that.
+
+Untested against reality: the headed sign-in window from the UI, and the
+post-restart cookie check, since nobody has signed in yet.
+
+### Notifications and the second laptop (2026-09-04)
+
+The ntfy topic is `roc-SyE4Bm_bRMn1`, generated 2026-09-04 and living in
+`config.local.json`, which is git-ignored. Treat it as a password: anyone who
+knows a topic can read and post to it. A test push was sent and accepted.
+
+Daniel is moving this to a laptop he can leave open all day. Three things do
+NOT travel with the repo, because all three are git-ignored:
+
+- `config.local.json` -- the ntfy topic. Copy it, or recreate it with the topic
+  above so both machines push to the same phone subscription.
+- `.browser-profiles/` -- the signed-in sessions. Machine-local and should
+  stay that way; everyone signs in again on the new laptop.
+- `node_modules/` -- `npm install` plus `npx playwright install chromium`.
+
+Also worth telling him: Windows sleep will pause the watcher. A laptop left
+open all day still needs its sleep and hibernate settings changed, or a 30-hour
+football watch quietly stops when the lid timer fires.
 
 ### On deploying this (asked 2026-09-03, answered: no)
 
