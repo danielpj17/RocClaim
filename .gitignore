@@ -7,3 +7,4 @@ logs/
 .login-done
 .record-done
 *.har
+.queue.json

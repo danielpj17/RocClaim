@@ -129,6 +129,21 @@
       want — and if your plans change, return the ticket.
     </div>
 
+    <label style="display:flex;align-items:center;gap:8px;margin-top:14px;font-weight:600;font-size:12px">
+      <input type="checkbox" id="queueOn" style="width:auto;margin:0" />
+      Take turns with other people (queue)
+    </label>
+    <div id="queueFields" hidden>
+      <label for="queueName">This profile is</label>
+      <input id="queueName" placeholder="e.g. Daniel" maxlength="40" />
+      <div class="hint">
+        One Chrome profile per person, signed in to their own BYU account. Needs the
+        queue server running on this laptop (<b>npm run up</b>). Order and skips:
+        <b>localhost:4321</b> or the phone link. Stop here ends the whole queue.
+      </div>
+    </div>
+    <div class="status" id="queueStatus" hidden></div>
+
     <div class="row">
       <button id="start">Watch this tab</button>
       <button id="stop">Stop</button>
@@ -151,6 +166,7 @@
     <div id="log"></div>
 
     <script src="push.js"></script>
+    <script src="queue.js"></script>
     <script src="popup.js"></script>
   </body>
 </html>

@@ -676,6 +676,71 @@ just claimed is a real one -- if plans change, return it.
 
 ---
 
+## 0.14. Side panel + multi-person queue (2026-10-05)
+
+From `GAMEPLAN.md`. Daniel runs only `extension/` (ROC Claim Watcher);
+`extension-api/` is a retired experiment and was deliberately left alone,
+apart from its byte-identical `cart.js` copy.
+
+**Side panel.** The extension's UI opens as a Chrome side panel, not a popup, so
+it stays open while he clicks around. Consequence: "Watch this tab" means
+whichever tab is in front, so the panel shows that tab and only arms a
+`/students/event/<season>/<item>` page.
+
+**The queue.** Claims one ticket per person, back to back, in an order he edits.
+One person = **one Chrome profile**, signed in to *their own* BYU account, with
+the extension loaded. Still no passwords anywhere (section 4 covers every
+account). Each person needs their own ROC pass; never claim on one account for
+someone else.
+
+```
+lib/queue.js          the rules, pure, fake-clock tested (test/queue.test.js)
+server.js             /api/queue/* -- state saved to .queue.json (git-ignored)
+public/queue.html     the panel, now at / (the old Playwright panel is /playwright)
+extension/queue.js    what one profile does with the server's answer (pure)
+extension/background.js  checks in every 30s, arms/disarms the tab, reports
+```
+
+Decided with Daniel:
+
+- **A local coordinator, not a manual handoff.** Profiles cannot talk to each
+  other, so the server holds the order. It must be running (`npm run up`); that
+  also gives the phone link.
+- **Only a placed order ends a turn.** A found seat whose 10-minute hold runs
+  out keeps that person's turn and the search resumes (after 12 min). This is
+  why `cart.js` now records a manual finish after a handover -- before, only an
+  auto-claim attempt counted, and a turn would have stuck open.
+
+Rules worth not "simplifying":
+
+- **A waiting profile touches nothing on BYU** -- no reloads, no searches; it
+  only asks localhost. N people in the queue = one person's traffic. Section 5.
+- **One hard stop for everyone.** Joining a running queue takes its stop time.
+- **skip vs abort.** Tab closed or page stopped loading (what being signed out
+  looks like) -> skip to the next person. Blind probe, human check, refused
+  click, not free -> end the whole queue, since the next person would hit it too.
+  The mapping is `classifyStop()` in `extension/queue.js`, and a test pins it to
+  the actual `stoppedReason` strings -- reword one and a skip silently becomes an
+  abort.
+- **Stop in any profile ends the whole queue.** Skip-one is on the server panel.
+- **A no-show is skipped after 5 minutes** without a check-in, so one closed
+  profile cannot hold everyone until the stop time. They rejoin at the back.
+- **Reports from someone whose turn it is not are ignored**, except Stop.
+- The queue POST routes require `application/json`, so a random web page cannot
+  stop or skip the queue with a cross-site form post.
+- Every push is prefixed `[Name]`. Push settings are per profile -- use the same
+  Telegram bot/chat in each to get everything on one phone.
+
+**Tested:** 20 rules tests, 15 extension-decision tests, and
+`test/queue-e2e.test.js`: the real server plus two real Chrome profiles with the
+extension loaded and BYU stubbed. Daniel searches, Wife waits without searching,
+a found seat alone does not move the queue, his placed order does, her profile
+arms itself, and Stop in hers ends it for both. Verified that breaking the
+found-seat rule makes it fail. It skips itself if port 4321 is in use.
+**Not yet run against BYU with two real accounts.**
+
+---
+
 ## 1. What this is
 
 A watcher that monitors the BYU ROC **last-chance / returned-ticket** claim and
@@ -1286,7 +1351,7 @@ countdown is not a change, "COMING SOON" becoming "Buy" *is*, and
 
 ## 13. Test suite
 
-**210 tests, all passing** (`npm test`), 49 of them driving real headless
+**246 tests, all passing** (`npm test`), 49 of them driving real headless
 Chromium against real DOM.
 
 - `test/watcher.test.js` — 16, fake clock, no network
@@ -1317,6 +1382,8 @@ Chromium against real DOM.
   appears once: the body already ends with the order URL, so the click target
   is not appended after it again (Telegram and Discord render it inline; ntfy
   carries it as a header and never showed it twice).
+- `test/queue.test.js` — 20, `test/queue-ext.test.js` — 15,
+  `test/queue-e2e.test.js` — 1 (two real profiles); section 0.14
 - `lib/config.test.js` — 2, config merge and the 5s poll floor
 
 The suite is worth more than usual here, because the parts it covers are the

@@ -16,7 +16,7 @@
 // until the game started. So an alarm checks the heartbeat, reloads the armed
 // tab once to try to restart the loop, and pushes loudly if that does not take.
 
-importScripts('detect.js', 'push.js');
+importScripts('detect.js', 'push.js', 'queue.js');
 
 // The UI is a side panel, not a popup: a popup closes the moment you click the
 // page, and this is something you keep an eye on while browsing. Clicking the
@@ -39,6 +39,10 @@ const POLL_ALARM = 'roc-next-poll';
 const WATCHDOG_PERIOD_MIN = 0.5;
 
 const HOST_MATCH = 'https://byutickets.evenue.net/*';
+
+// Checking in with the queue server. 0.5 min is the alarm floor; a waiting
+// profile asks only the local server, never BYU, so this costs nothing there.
+const QUEUE_ALARM = 'roc-queue';
 
 const get = (keys) => chrome.storage.local.get(keys);
 const set = (obj) => chrome.storage.local.set(obj);
@@ -101,7 +105,9 @@ chrome.notifications.onButtonClicked.addListener((id) => openTarget(id));
 chrome.notifications.onClosed.addListener((id) => clickTargets.delete(id));
 
 async function notify(msg) {
-  const cfg = await get(['provider', 'topic', 'server', 'tgToken', 'tgChat', 'discordUrl']);
+  const cfg = await get(['provider', 'topic', 'server', 'tgToken', 'tgChat', 'discordUrl', 'queueJoined']);
+  // In a queue, every push names whose account it is about.
+  if (cfg.queueJoined) msg = { ...msg, title: ROCQueue.titleFor(cfg.queueJoined.name, msg.title) };
   const provider = cfg.provider || 'telegram';
   const creds = {
     topic: cfg.topic,
@@ -156,6 +162,16 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.type === 'notify') {
     notify(msg).then(sendResponse);
     return true; // keep the message channel open for the async reply
+  }
+
+  if (msg.type === 'queue-join') {
+    queueJoin(msg).then(sendResponse);
+    return true;
+  }
+
+  if (msg.type === 'queue-stop') {
+    queueStop().then(sendResponse);
+    return true;
   }
 
   // The page has finished a cycle and wants the next one booked.
@@ -299,9 +315,208 @@ async function runWatchdog() {
   }
 }
 
+// --- the queue --------------------------------------------------------------
+//
+// See queue.js for the decisions and lib/queue.js for the server's rules. This
+// part only talks to the server and moves the tab.
+
+async function queueCall(path, body) {
+  try {
+    const res = await fetch(ROCQueue.SERVER + path, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body || {}),
+    });
+    const data = await res.json().catch(() => null);
+    if (!res.ok) return { ok: false, error: (data && data.error) || 'HTTP ' + res.status };
+    return { ok: true, data };
+  } catch {
+    return {
+      ok: false,
+      offline: true,
+      error: 'The queue server is not running on this laptop. Start it with npm run up.',
+    };
+  }
+}
+
+async function queueJoin(msg) {
+  const r = await queueCall('/api/queue/join', { name: msg.name, eventUrl: msg.eventUrl, stopAt: msg.stopAt });
+  if (!r.ok) return r;
+  await set({
+    queueJoined: { name: msg.name, eventUrl: msg.eventUrl.split('#')[0], tabId: msg.tabId },
+    queueTurn: r.data,
+    queueError: null,
+    queuePendingReport: null,
+    queueTurnSince: null,
+  });
+  await logLine('joined the queue as ' + msg.name + ' -- ' + ROCQueue.orderLine(r.data));
+  chrome.alarms.create(QUEUE_ALARM, { periodInMinutes: WATCHDOG_PERIOD_MIN });
+  await queueSync(r.data);
+  return r;
+}
+
+// Stop in a queued profile ends the whole queue -- that is what the button
+// says. Leave first, so the stop below is not reported a second time.
+async function queueStop() {
+  const { queueJoined } = await get(['queueJoined']);
+  let r = { ok: true };
+  if (queueJoined) r = await queueCall('/api/queue/report', { name: queueJoined.name, kind: 'stopped' });
+  await set({ queueJoined: null, queuePendingReport: null });
+  await chrome.alarms.clear(QUEUE_ALARM);
+  await set({ enabled: false, stoppedReason: 'stopped by you', stoppedAt: Date.now() });
+  return r;
+}
+
+// The tab this profile joined with. It may have moved on to /cart after a seat,
+// so match by id first and by the event URL second.
+async function queueTab(j) {
+  if (j.tabId != null) {
+    try {
+      const t = await chrome.tabs.get(j.tabId);
+      if (t && /^https:\/\/byutickets\.evenue\.net\//.test(t.url || '')) return t;
+    } catch {}
+  }
+  return findArmedTab(j.eventUrl);
+}
+
+let queueChain = Promise.resolve();
+function queueSync(prefetched) {
+  queueChain = queueChain
+    .then(() => doQueueSync(prefetched))
+    .catch((e) => logLine('queue sync failed: ' + e.message));
+  return queueChain;
+}
+
+async function sendReport(j, report) {
+  const r = await queueCall('/api/queue/report', { name: j.name, kind: report.kind, detail: report.detail });
+  if (!r.ok) {
+    // Offline: keep it and retry on the next check-in. Refused: it never will
+    // be accepted, so drop it rather than loop on it.
+    if (!r.offline) {
+      await set({ queuePendingReport: null });
+      await logLine('queue refused the report (' + report.kind + '): ' + r.error);
+    }
+    return null;
+  }
+  await set({ queuePendingReport: null });
+  const t = r.data;
+  const after =
+    t.status === 'running'
+      ? t.current ? 'Next up: ' + t.current + '.' : ''
+      : 'The queue is finished' + (t.outcome ? ' (' + t.outcome + ')' : '') + '.';
+  if (report.kind === 'claimed') {
+    await notify({ title: 'Done -- ticket claimed', message: after + '\n' + ROCQueue.orderLine(t), priority: 'default' });
+  } else if (report.kind === 'skip') {
+    await notify({
+      title: 'Skipped in the queue',
+      message: 'This profile could not keep watching (' + report.detail + '), so the queue moved on. ' + after,
+      priority: 'high',
+    });
+  } else if (report.kind === 'abort') {
+    await notify({
+      title: 'Queue ENDED',
+      message:
+        'The watch stopped for a reason the next person would hit too (' + report.detail +
+        '), so nobody else will be tried. Fix it and start again.',
+      priority: 'high',
+    });
+  }
+  return t;
+}
+
+// depth bounds the re-runs after a report, so a server that keeps refusing a
+// report can never spin this into a loop.
+async function doQueueSync(prefetched, depth = 0) {
+  const st = await get([
+    'queueJoined', 'queuePendingReport', 'queueTurnSince', 'enabled', 'seatFoundAt', 'claimResult',
+  ]);
+  const j = st.queueJoined;
+  if (!j) {
+    await chrome.alarms.clear(QUEUE_ALARM);
+    return;
+  }
+
+  let turn = prefetched || null;
+  if (st.queuePendingReport) turn = (await sendReport(j, st.queuePendingReport)) || turn;
+  if (!turn) {
+    const r = await queueCall('/api/queue/checkin', { name: j.name });
+    turn = r.ok ? r.data : null;
+    await set({ queueError: r.ok ? null : r.error });
+  }
+  if (turn) await set({ queueTurn: turn, queueSeenAt: Date.now() });
+
+  const now = Date.now();
+  const d = ROCQueue.decide(st, turn, now);
+
+  if (d.action === 'arm' || d.action === 'resume') {
+    const tab = await queueTab(j);
+    if (!tab) {
+      await set({ queuePendingReport: { kind: 'skip', detail: 'the event tab was closed' } });
+      return depth < 2 ? doQueueSync(null, depth + 1) : undefined;
+    }
+    const fresh = st.queueTurnSince !== turn.turnSince;
+    await set({
+      ...ROCQueue.armFields(j.eventUrl, turn.stopAt, now),
+      queueTurnSince: turn.turnSince,
+      ...(d.action === 'resume' ? { claimResult: null } : {}),
+    });
+    await logLine('queue: ' + (d.action === 'resume' ? 'searching again -- ' : 'our turn -- ') + d.why);
+    try {
+      if (String(tab.url || '').split('#')[0] === j.eventUrl) await chrome.tabs.reload(tab.id);
+      else await chrome.tabs.update(tab.id, { url: j.eventUrl });
+    } catch (err) {
+      await logLine('queue: could not load the event tab: ' + err.message);
+    }
+    if (d.action === 'resume') {
+      await notify({
+        title: 'Seat hold ran out -- searching again',
+        message:
+          'A seat was found but no order was placed before the hold expired. It is still ' +
+          'this turn, so the search has restarted.\n' + j.eventUrl,
+        priority: 'high',
+      });
+    } else if (fresh) {
+      await notify({
+        title: 'Your turn -- searching now',
+        message:
+          'The queue moved to this account and the seat search has started.\n' +
+          ROCQueue.orderLine(turn) + '\n' + j.eventUrl,
+        priority: 'default',
+      });
+    }
+    return;
+  }
+
+  if (d.action === 'disarm') {
+    await set({ enabled: false, stoppedReason: 'queue: ' + d.why, stoppedAt: now });
+    await logLine('queue: stopped searching -- ' + d.why);
+    if (turn && turn.status === 'running') {
+      await notify({ title: 'Stopped -- not your turn', message: 'The queue moved on: ' + d.why + '.', priority: 'default' });
+    }
+    return;
+  }
+
+  if (d.action === 'abort') {
+    await set({ queuePendingReport: { kind: 'abort', detail: d.why } });
+    return depth < 2 ? doQueueSync(null, depth + 1) : undefined;
+  }
+
+  if (d.action === 'leave') {
+    await set({ queueJoined: null });
+    await chrome.alarms.clear(QUEUE_ALARM);
+    await logLine('queue: left -- ' + d.why + (turn && turn.outcome ? ' (' + turn.outcome + ')' : ''));
+  }
+}
+
+async function ensureQueueAlarm() {
+  const { queueJoined } = await get(['queueJoined']);
+  if (queueJoined) chrome.alarms.create(QUEUE_ALARM, { periodInMinutes: WATCHDOG_PERIOD_MIN });
+}
+
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === WATCHDOG_ALARM) runWatchdog();
   if (alarm.name === POLL_ALARM) runPoll();
+  if (alarm.name === QUEUE_ALARM) queueSync();
 });
 
 // Arm and disarm the alarm from the state itself, so every path that starts or
@@ -311,12 +526,32 @@ chrome.storage.onChanged.addListener((changes, area) => {
   if (area !== 'local') return;
   if (changes.enabled) syncAlarm();
 
+  // A queued watch that ended on its own: tell the server how, so it can move
+  // on or end the queue. The reason is written in the same set() as enabled.
+  if (changes.enabled && changes.enabled.oldValue === true && changes.enabled.newValue === false) {
+    get(['queueJoined', 'stoppedReason']).then(({ queueJoined, stoppedReason }) => {
+      if (!queueJoined) return;
+      const kind = ROCQueue.classifyStop(stoppedReason);
+      if (!kind || kind === 'seat') return; // a held seat does not end the turn
+      set({ queuePendingReport: { kind, detail: stoppedReason } }).then(() => queueSync());
+    });
+  }
+
+  // A placed order -- the only thing that ends a person's turn.
+  if (changes.claimResult && changes.claimResult.newValue === 'claimed') {
+    get(['queueJoined', 'claimedBy']).then(({ queueJoined, claimedBy }) => {
+      if (!queueJoined) return;
+      const detail = claimedBy === 'auto' ? 'auto-claim' : 'finished by hand';
+      set({ queuePendingReport: { kind: 'claimed', detail } }).then(() => queueSync());
+    });
+  }
+
   // The seat-found push is sent from HERE, not from the page. The content
   // script writes one record and may be torn down by the navigation to /cart
   // before it could do anything else; this worker is not.
   if (changes.seatFound && changes.seatFound.newValue) {
     const f = changes.seatFound.newValue;
-    get(['autoClaim']).then(({ autoClaim }) =>
+    get(['autoClaim', 'queueJoined']).then(({ autoClaim, queueJoined }) =>
       notify({
         title: 'ROC SEAT FOUND -- GO NOW',
         message:
@@ -326,6 +561,10 @@ chrome.storage.onChanged.addListener((changes, area) => {
             ? 'Auto-claim is ON and is finishing the checkout. You will get a second push ' +
               'saying CLAIMED, or one saying it needs you.'
             : 'The watch has STOPPED. Finish the claim yourself.') +
+          (queueJoined
+            ? '\n\nIn the queue: the turn ends only when the order is placed. If the hold ' +
+              'runs out first, searching resumes for this account.'
+            : '') +
           '\n' + (f.url || ''),
         priority: 'urgent',
         click: f.url || undefined,
@@ -336,3 +575,5 @@ chrome.storage.onChanged.addListener((changes, area) => {
 
 chrome.runtime.onStartup.addListener(syncAlarm);
 chrome.runtime.onInstalled.addListener(syncAlarm);
+chrome.runtime.onStartup.addListener(ensureQueueAlarm);
+chrome.runtime.onInstalled.addListener(ensureQueueAlarm);

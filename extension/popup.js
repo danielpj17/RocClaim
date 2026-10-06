@@ -32,11 +32,50 @@ async function renderFront() {
     : 'Front tab is not a BYU event page -- open one to watch it.';
 }
 
+// The queue box. Built with textContent, not innerHTML: the names are typed in
+// by people, and this page has extension privileges.
+function renderQueue(st) {
+  if (!$('queueName').dataset.touched && st.queueName && !$('queueName').value) $('queueName').value = st.queueName;
+  const on = !!(st.queueOn || st.queueJoined);
+  $('queueOn').checked = on;
+  $('queueOn').disabled = !!st.queueJoined; // leave with Stop, not by unticking
+  $('queueName').disabled = !!st.queueJoined;
+  $('queueFields').hidden = !on;
+  $('start').textContent = st.queueJoined ? 'In the queue' : on ? 'Join the queue with this tab' : 'Watch this tab';
+  $('start').disabled = !!st.queueJoined;
+
+  const box = $('queueStatus');
+  if (!st.queueJoined) {
+    box.hidden = true;
+    return;
+  }
+  box.hidden = false;
+  const t = st.queueTurn;
+  const lines = [];
+  if (st.queueError) lines.push('Cannot reach the queue: ' + st.queueError);
+  if (t && t.status === 'running') {
+    lines.push(
+      t.myTurn
+        ? st.queueJoined.name + "'s turn -- searching" + (t.next ? ' (next: ' + t.next + ')' : '')
+        : 'Waiting. Up now: ' + (t.current || '--') + '. Not searching, so no load on BYU.'
+    );
+    lines.push(ROCQueue.orderLine(t));
+    if (t.stopAt) lines.push('Queue stops at ' + fmt(t.stopAt));
+  } else if (t) {
+    lines.push('Queue finished' + (t.outcome ? ': ' + t.outcome : ''));
+  }
+  if (st.queueSeenAt) lines.push('last check-in ' + fmt(st.queueSeenAt));
+  box.textContent = lines.join('\n');
+  box.style.whiteSpace = 'pre-wrap';
+}
+
 async function render() {
   const st = await get([
     'enabled', 'targetUrl', 'stopAt', 'polls', 'lastCheck',
     'stoppedReason', 'stoppedAt', 'topic', 'log', 'provider', 'tgToken', 'tgChat', 'discordUrl', 'cartSnapshot', 'cartSnapshotAt', 'cartPages', 'lastRawAnswer', 'autoClaim', 'claimResult', 'lastResult', 'nextPollAt', 'lastSnapshot',
+    'queueOn', 'queueName', 'queueJoined', 'queueTurn', 'queueError', 'queueSeenAt',
   ]);
+  renderQueue(st);
 
   const provider = st.provider || 'telegram';
   if (!$('provider').dataset.touched) $('provider').value = provider;
@@ -193,29 +232,36 @@ $('start').addEventListener('click', async () => {
     return;
   }
 
-  await set({
-    enabled: true,
-    topic,
-    targetUrl: tab.url.split('#')[0],
-    stopAt,
-    baselineFp: null,
-    // Cleared so the next load re-baselines against the page as it is right
-    // now, rather than inheriting what some earlier watch saw.
-    claimBaseline: null,
-    polls: 0,
-    stoppedReason: null,
-    stoppedAt: null,
-    lastCheck: null,
-    // The watchdog needs a starting heartbeat: without one it cannot tell
-    // "armed a second ago" from "armed an hour ago and the script never ran".
-    armedAt: Date.now(),
-    recoveryAt: null,
-    // Probe = run the seat search and read the answer. See CLAUDE.md 0.5.
-    strategy: 'probe',
-    unknownStreak: 0,
-    lastResult: null,
-    lastResultAt: null,
-  });
+  if ($('queueOn').checked) {
+    // The queue decides when this profile searches; the worker arms the tab
+    // when the server says it is our turn. Joining a queue that is already
+    // running uses ITS stop time -- there is one hard stop for everyone.
+    const name = $('queueName').value.trim();
+    if (!name) {
+      $('status').textContent = 'Type whose profile this is first -- every push and the queue order use that name.';
+      return;
+    }
+    await set({ topic, queueName: name });
+    $('status').textContent = 'Joining the queue...';
+    const r = await new Promise((resolve) =>
+      chrome.runtime.sendMessage(
+        { type: 'queue-join', name, eventUrl: tab.url.split('#')[0], tabId: tab.id, stopAt },
+        (res) => {
+          void chrome.runtime.lastError;
+          resolve(res);
+        }
+      )
+    );
+    if (!r || !r.ok) {
+      $('status').innerHTML = '<span class="off">Not joined:</span> ';
+      $('status').append((r && r.error) || 'no answer from the extension');
+      return;
+    }
+    await render();
+    return;
+  }
+
+  await set({ topic, ...ROCQueue.armFields(tab.url, stopAt, Date.now()) });
 
   // The content script only acts on load, so kick the first one off.
   chrome.tabs.reload(tab.id);
@@ -223,9 +269,28 @@ $('start').addEventListener('click', async () => {
 });
 
 $('stop').addEventListener('click', async () => {
-  await set({ enabled: false, stoppedReason: 'stopped by you', stoppedAt: Date.now() });
+  const { queueJoined } = await get(['queueJoined']);
+  if (queueJoined) {
+    // Ends the whole queue, for every profile -- the hint under the box says so.
+    const r = await new Promise((resolve) =>
+      chrome.runtime.sendMessage({ type: 'queue-stop' }, (res) => {
+        void chrome.runtime.lastError;
+        resolve(res);
+      })
+    );
+    if (r && !r.ok) $('status').textContent = 'Stopped here, but the queue server did not hear it: ' + r.error;
+  } else {
+    await set({ enabled: false, stoppedReason: 'stopped by you', stoppedAt: Date.now() });
+  }
   await render();
 });
+
+$('queueOn').addEventListener('change', async () => {
+  await set({ queueOn: $('queueOn').checked });
+  await render();
+});
+$('queueName').addEventListener('input', () => ($('queueName').dataset.touched = '1'));
+$('queueName').addEventListener('change', () => set({ queueName: $('queueName').value.trim() }));
 
 $('test').addEventListener('click', async () => {
   await saveProvider();

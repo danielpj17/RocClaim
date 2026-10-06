@@ -59,7 +59,7 @@ Do the same to `extension-api/` if he uses that one too.
 5. Reload the unpacked extension in `chrome://extensions`, then run
    `npm test`. `test/popup.test.js` may assume a popup.
 
-## Step 2 — multiple people, in the extension world
+## Step 2 — multiple people — DONE as option B (2026-10-05), see CLAUDE.md 0.14
 
 The extension uses whatever BYU login is in the Chrome it runs in. So "one
 saved login per person" becomes **one Chrome profile per person**: Chrome's

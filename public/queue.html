@@ -1,0 +1,212 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>ROC Queue</title>
+<style>
+  :root { color-scheme: light dark; --byu: #002E5D; --line: #8884; --soft: #8881; }
+  [hidden] { display: none !important; }
+  body { margin: 0; font: 15px/1.45 system-ui, -apple-system, Segoe UI, sans-serif; }
+  main { max-width: 560px; margin: 0 auto; padding: 16px; }
+  h1 { font-size: 19px; margin: 4px 0 2px; }
+  h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .05em; opacity: .7; margin: 22px 0 8px; }
+  .muted { opacity: .65; }
+  .small { font-size: 12px; }
+  .card { border: 1px solid var(--line); border-radius: 10px; padding: 12px; background: var(--soft); }
+  ul { list-style: none; margin: 0; padding: 0; }
+  li.person { display: flex; align-items: center; gap: 8px; padding: 8px 0; border-bottom: 1px solid var(--line); }
+  li.person:last-child { border-bottom: 0; }
+  li.person .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; background: #9995; flex: none; }
+  .dot.here { background: #0a7d3c; }
+  button { font: inherit; border: 0; border-radius: 7px; padding: 8px 12px; cursor: pointer; background: #8883; color: inherit; }
+  button.icon { padding: 6px 10px; }
+  button.primary { background: var(--byu); color: #fff; font-weight: 600; }
+  button.danger { background: #a33; color: #fff; font-weight: 600; }
+  button:disabled { opacity: .4; cursor: default; }
+  input[type=text] { font: inherit; padding: 8px 10px; border: 1px solid var(--line); border-radius: 7px; background: transparent; color: inherit; flex: 1; min-width: 0; }
+  input[type=checkbox] { width: 20px; height: 20px; flex: none; }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+  .state { font-size: 12px; padding: 2px 8px; border-radius: 99px; background: #8882; white-space: nowrap; }
+  .s-up { background: #0a7d3c; color: #fff; }
+  .s-claimed { background: #0a7d3c33; }
+  .s-skipped, .s-stopped { background: #a333; }
+  #err { color: #c33; margin-top: 8px; min-height: 1em; }
+  #log { font: 12px/1.5 ui-monospace, Consolas, monospace; white-space: pre-wrap; opacity: .8; max-height: 40vh; overflow-y: auto; }
+  .help { font-size: 13px; }
+  .help li { margin: 4px 0; }
+</style>
+</head>
+<body>
+<main>
+  <h1>ROC Queue</h1>
+  <div class="muted small" id="sub">Takes turns claiming one ticket per person, back to back.</div>
+
+  <h2>Now</h2>
+  <div class="card" id="run">…</div>
+  <div class="row" id="runButtons" hidden>
+    <button id="skip">Skip whoever is up</button>
+    <button id="stop" class="danger">Stop the queue</button>
+  </div>
+
+  <h2>People, in order</h2>
+  <div class="card">
+    <ul id="people"></ul>
+    <div class="row">
+      <input type="text" id="newName" placeholder="Add a name (must match their profile)" maxlength="40" />
+      <button id="add">Add</button>
+    </div>
+    <div class="muted small" style="margin-top:8px">
+      Green dot = that person's Chrome profile is open and checking in. Untick to leave
+      someone out of the next run.
+    </div>
+  </div>
+  <div id="err"></div>
+
+  <h2>How to start</h2>
+  <ul class="help">
+    <li>Each person needs their <b>own Chrome profile</b>, signed in to <b>their own</b> BYU account, with the extension loaded. Their ROC pass, their ticket.</li>
+    <li>In each profile: open the game page, open the side panel, tick <b>Take turns</b>, type that person's name, press <b>Watch this tab</b>.</li>
+    <li>The first one starts the queue with its stop time. Everyone else joins it and waits; only the person who is up searches.</li>
+    <li>Someone counts as done only once their order is placed. If a seat's 10-minute hold runs out, they keep their turn.</li>
+  </ul>
+
+  <h2>Log</h2>
+  <div class="card" id="log"></div>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+let state = null;
+let editing = false; // don't redraw the list out from under a click
+
+const fmt = (ts) => ts ? new Date(ts).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : '--';
+const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+async function call(path, body) {
+  $('err').textContent = '';
+  try {
+    const res = await fetch(path, body === undefined ? {} : {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
+    });
+    const json = await res.json();
+    if (!res.ok) throw new Error(json.error || res.status);
+    return json;
+  } catch (e) {
+    $('err').textContent = e.message;
+    return null;
+  }
+}
+
+async function load() {
+  const s = await call('/api/queue');
+  if (s) { state = s; render(); }
+}
+
+function render() {
+  const run = state.run;
+  const live = run && run.status === 'running';
+  $('runButtons').hidden = !live;
+  if (!run) {
+    $('run').innerHTML = '<span class="muted">Not running. Start it from the extension\'s side panel.</span>';
+  } else {
+    const ev = run.eventUrl.replace(/^https:\/\/[^/]+/, '');
+    const up = run.order.find((e) => e.state === 'up');
+    const rows = run.order.map((e) =>
+      `<li class="person"><span class="name">${esc(e.name)}${e.note ? ' <span class="muted small">— ' + esc(e.note) + '</span>' : ''}</span>` +
+      `<span class="state s-${e.state}">${e.state === 'up' ? 'searching' : esc(e.state)}</span></li>`).join('');
+    $('run').innerHTML =
+      `<div><b>${live ? 'Running' : 'Finished'}</b> &middot; ${esc(ev)}</div>` +
+      `<div class="small muted">${live ? 'stops at ' + fmt(run.stopAt) : esc(run.outcome || '')}</div>` +
+      (live && up ? `<div class="small" style="margin-top:6px">Up now: <b>${esc(up.name)}</b> since ${fmt(up.since)}</div>` : '') +
+      `<ul style="margin-top:6px">${rows}</ul>`;
+  }
+
+  if (!editing) {
+    const n = state.people.length;
+    $('people').innerHTML = n ? state.people.map((p, i) =>
+      `<li class="person">
+        <input type="checkbox" data-i="${i}" class="on" ${p.on ? 'checked' : ''} aria-label="include ${esc(p.name)}" />
+        <span class="dot ${p.here ? 'here' : ''}" title="${p.here ? 'profile is checking in' : 'profile not seen recently'}"></span>
+        <span class="name">${esc(p.name)}</span>
+        <button class="icon" data-i="${i}" data-move="-1" ${i === 0 ? 'disabled' : ''} aria-label="move up">&uarr;</button>
+        <button class="icon" data-i="${i}" data-move="1" ${i === n - 1 ? 'disabled' : ''} aria-label="move down">&darr;</button>
+        <button class="icon" data-i="${i}" data-remove aria-label="remove">&times;</button>
+      </li>`).join('') : '<li class="muted">Nobody yet. Add names here, or just press Watch in each profile.</li>';
+  }
+
+  $('log').textContent = state.log.slice().reverse().map((l) => `${fmt(l.at)}  ${l.line}`).join('\n');
+}
+
+async function savePeople(people) {
+  const s = await call('/api/queue/people', { people });
+  if (s) { state = s; render(); }
+}
+
+$('people').addEventListener('click', (e) => {
+  const b = e.target.closest('button');
+  if (!b) return;
+  const people = state.people.map((p) => ({ name: p.name, on: p.on }));
+  const i = Number(b.dataset.i);
+  if (b.dataset.move) {
+    const j = i + Number(b.dataset.move);
+    [people[i], people[j]] = [people[j], people[i]];
+  } else if (b.hasAttribute('data-remove')) {
+    people.splice(i, 1);
+  }
+  savePeople(people);
+});
+
+$('people').addEventListener('change', (e) => {
+  if (!e.target.classList.contains('on')) return;
+  const people = state.people.map((p) => ({ name: p.name, on: p.on }));
+  people[Number(e.target.dataset.i)].on = e.target.checked;
+  savePeople(people);
+});
+
+$('add').addEventListener('click', () => {
+  const name = $('newName').value.trim();
+  if (!name) return;
+  savePeople(state.people.map((p) => ({ name: p.name, on: p.on })).concat({ name, on: true }))
+    .then(() => { $('newName').value = ''; });
+});
+$('newName').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('add').click(); });
+$('newName').addEventListener('focus', () => (editing = true));
+$('newName').addEventListener('blur', () => (editing = false));
+
+$('skip').addEventListener('click', async () => {
+  const up = state.run && state.run.order.find((e) => e.state === 'up');
+  if (!up) return;
+  if ($('skip').dataset.armed !== up.name) {
+    // Confirm in place: the viewer may block confirm() dialogs, and a skip is
+    // not undoable.
+    $('skip').dataset.armed = up.name;
+    $('skip').textContent = `Tap again to skip ${up.name}`;
+    setTimeout(() => { delete $('skip').dataset.armed; $('skip').textContent = 'Skip whoever is up'; }, 4000);
+    return;
+  }
+  delete $('skip').dataset.armed;
+  $('skip').textContent = 'Skip whoever is up';
+  const s = await call('/api/queue/skip', {});
+  if (s) { state = s; render(); }
+});
+
+$('stop').addEventListener('click', async () => {
+  if ($('stop').dataset.armed !== '1') {
+    $('stop').dataset.armed = '1';
+    $('stop').textContent = 'Tap again to stop everyone';
+    setTimeout(() => { delete $('stop').dataset.armed; $('stop').textContent = 'Stop the queue'; }, 4000);
+    return;
+  }
+  delete $('stop').dataset.armed;
+  $('stop').textContent = 'Stop the queue';
+  const s = await call('/api/queue/stop', {});
+  if (s) { state = s; render(); }
+});
+
+load();
+setInterval(load, 3000);
+</script>
+</body>
+</html>

@@ -65,8 +65,16 @@
     // records each forward button it actually clicked, just before clicking.
     // If it clicked Place Order on checkout recently, the automation drove the
     // final step; otherwise the human did, and we must not claim otherwise.
+    //
+    // "Ours" means an order following a seat one of our own searches found in
+    // the last half hour -- whether or not auto-claim tried, and whether or not
+    // it handed over first. Before 2026-10-05 a manual finish after a handover
+    // went unrecorded; with the queue that would hold a person's turn open
+    // after their order was placed. Bounded by seatFoundAt so opening an old
+    // order page days later never reads as a fresh claim.
     if (where === 'order') {
-      if (st.claimAttemptAt && !st.claimResult) {
+      const ours = st.seatFoundAt && Date.now() - Number(st.seatFoundAt) < 30 * 60 * 1000;
+      if (ours && st.claimResult !== 'claimed') {
         const clicks = st.autoClicks || {};
         const drove = clicks.checkout && Date.now() - Number(clicks.checkout) < 2 * 60 * 1000;
         await set({ claimResult: 'claimed', claimedBy: drove ? 'auto' : 'you', claimedAt: Date.now() });

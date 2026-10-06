@@ -16,6 +16,7 @@ const { makeNotifier } = require('./lib/notify');
 const { createSite } = require('./lib/site');
 const { Watcher } = require('./watcher');
 const { createAuth, loadOrCreateToken } = require('./lib/panel-auth');
+const { Queue } = require('./lib/queue');
 
 const config = loadConfig();
 const SITE_KIND = process.argv.includes('--fake') ? 'fake' : 'byu';
@@ -25,6 +26,21 @@ const LOG_MAX = 2000;
 const logs = [];
 const clients = new Set();
 let watcher = null;
+
+// The multi-person queue. Saved on every change so a server restart mid-run
+// (laptop update, npm run down/up) does not forget whose turn it is.
+const QUEUE_FILE = process.env.ROC_QUEUE_FILE || path.join(__dirname, '.queue.json');
+function loadQueueState() {
+  try {
+    return JSON.parse(fs.readFileSync(QUEUE_FILE, 'utf8'));
+  } catch {
+    return null;
+  }
+}
+const queue = new Queue({ state: loadQueueState() });
+function saveQueue() {
+  fs.writeFileSync(QUEUE_FILE, JSON.stringify(queue, null, 1));
+}
 
 function pushLog(entry) {
   logs.push(entry);
@@ -111,9 +127,22 @@ async function startWatcher(body) {
   return status();
 }
 
+// The queue panel is the front page now: the Playwright panel below it cannot
+// reach BYU (CLAUDE.md section 0) and is kept only for the fake-site demo.
 const STATIC = {
-  '/': ['public/index.html', 'text/html; charset=utf-8'],
+  '/': ['public/queue.html', 'text/html; charset=utf-8'],
+  '/playwright': ['public/index.html', 'text/html; charset=utf-8'],
   '/index.html': ['public/index.html', 'text/html; charset=utf-8'],
+};
+
+// Queue routes: the extension in each Chrome profile, and the panel.
+const QUEUE_ROUTES = {
+  '/api/queue/people': (b) => queue.setPeople(b.people),
+  '/api/queue/join': (b) => queue.join({ name: b.name, eventUrl: b.eventUrl, stopAt: b.stopAt }),
+  '/api/queue/checkin': (b) => queue.checkin(b.name),
+  '/api/queue/report': (b) => queue.report({ name: b.name, kind: b.kind, detail: b.detail }),
+  '/api/queue/skip': () => queue.skipCurrent(),
+  '/api/queue/stop': () => queue.stop(),
 };
 
 const server = http.createServer(async (req, res) => {
@@ -142,6 +171,28 @@ const server = http.createServer(async (req, res) => {
       const [file, type] = STATIC[route];
       res.writeHead(200, { 'content-type': type });
       return res.end(fs.readFileSync(path.join(__dirname, file)));
+    }
+
+    if (req.method === 'GET' && route === '/api/queue') {
+      const snap = queue.snapshot();
+      saveQueue(); // snapshot() runs the clock rules, which can change state
+      return json(res, 200, snap);
+    }
+
+    if (req.method === 'POST' && QUEUE_ROUTES[route]) {
+      // JSON only. A web page can send a cross-site form POST to localhost
+      // without asking first; it cannot send application/json without a CORS
+      // preflight, which this server never answers. So no random site in his
+      // browser can stop or skip the queue.
+      if (!/^application\/json\b/i.test(req.headers['content-type'] || '')) {
+        return json(res, 415, { error: 'send application/json' });
+      }
+      const body = await readBody(req);
+      try {
+        return json(res, 200, QUEUE_ROUTES[route](body));
+      } finally {
+        saveQueue();
+      }
     }
 
     if (req.method === 'GET' && route === '/api/status') {
