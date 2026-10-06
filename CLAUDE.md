@@ -739,6 +739,54 @@ arms itself, and Stop in hers ends it for both. Verified that breaking the
 found-seat rule makes it fail. It skips itself if port 4321 is in use.
 **Not yet run against BYU with two real accounts.**
 
+### Same day, round two: game picker, autostart, phone link on demand
+
+Daniel asked why he had to run `npm run up`, and for a game picker in the panel.
+He captured `recon/browse.har` (git-ignored) browsing /students, three sports,
+one event page, then signing out. Read off it:
+
+- `/students` carries the sports list in its own `__NEXT_DATA__`
+  (`groupList.CHILDGROUPLIST`: STFB, STWS, STWVB, MM, STWB, and an "RT" Ticket
+  Return link that is not a sport). Each `/students/events/<CODE>` carries that
+  sport's games (`ssrData.discovery_eventlist`: SEASONCD, ITEMCD, EVENTDT,
+  SALEFROMDTUTC, SOLD_OUT...). Football also lists TYPE "M" "Student FB Request"
+  entries -- the Tuesday window, section 2 -- and the picker drops them.
+- `GET /pac-api/accounts` with the page's `pac-authz` returns `accountName`.
+  The signed-out answer was NOT captured (the HAR ends at signout); anything
+  without a name is read as signed out.
+- He hit a PerimeterX press-and-hold mid-capture ([47]: `/pac-api/auth/authz`
+  403), most likely from DevTools being open.
+
+`extension/catalog.js` parses those (pure half, `test/catalog.test.js` against
+trimmed fixtures in `test/fixtures/` -- game lists only, no account data) and,
+as a content script, does the fetches **inside a byutickets tab** when the
+panel asks. Never from the worker (0.9). Sports are cached a week, games an
+hour. Picking a game sets the stop time to kickoff. With nothing picked, the
+event page in front still works.
+
+**Autostart, not "click to start the server".** The queue needs something
+outside Chrome (profiles are sealed), and anything Chrome launches through
+native messaging runs in Chrome's job object and can die with it. So
+`npm run autostart` registers a Windows logon task ("ROC Claim queue server")
+running `tools/run-server.ps1`, which starts `server.js` hidden unless the port
+is already taken. Installed on this laptop 2026-10-05 and verified started by
+the task itself. `npm run autostart:off` removes it.
+
+**The phone link follows the queue** (`lib/tunnel.js`): cloudflared starts
+when a run starts and stops when it finishes, instead of running all day. Its
+pid goes to `logs/tunnel.pid` so `npm run down` still finds it. The profile that
+started the queue pushes the keyed link. Verified live: link up in seconds, 401
+without the key, 302 with it, cloudflared gone after stop.
+
+**Joining needs no game or tab.** The first profile names the game; everyone
+else presses Join and gets the running game and stop time. A waiting profile has
+no tab open -- its turn opens one. Each check-in reports the BYU account name,
+shown per person on the queue page.
+
+**Tests:** the queue e2e runs its own server on port 4391 (`ROC_PORT`), pointed at
+through the extension's `queueServer` setting, because the real server now always
+holds 4321. Host permission is `http://127.0.0.1/*` (any port) for that reason.
+
 ---
 
 ## 1. What this is
@@ -1351,7 +1399,7 @@ countdown is not a change, "COMING SOON" becoming "Buy" *is*, and
 
 ## 13. Test suite
 
-**246 tests, all passing** (`npm test`), 49 of them driving real headless
+**258 tests, all passing** (`npm test`), 49 of them driving real headless
 Chromium against real DOM.
 
 - `test/watcher.test.js` — 16, fake clock, no network
@@ -1373,7 +1421,7 @@ Chromium against real DOM.
   worker's fetch stubbed, so no request leaves the machine
 - `test/probe-dom.test.js` — 36, the DOM probe against a replica rebuilt from
   live dumps
-- `test/popup.test.js` — 11, the popup loaded in real Chrome. It exists because
+- `test/popup.test.js` — 12, the popup loaded in real Chrome. It exists because
   a syntax error there shipped while 100 other tests passed. Since 2026-10-05
   `extension/` opens it as a **side panel** (it stays open while browsing), so
   "Watch this tab" means whichever tab is in front; it shows that tab and only
@@ -1382,8 +1430,9 @@ Chromium against real DOM.
   appears once: the body already ends with the order URL, so the click target
   is not appended after it again (Telegram and Discord render it inline; ntfy
   carries it as a header and never showed it twice).
-- `test/queue.test.js` — 20, `test/queue-ext.test.js` — 15,
-  `test/queue-e2e.test.js` — 1 (two real profiles); section 0.14
+- `test/queue.test.js` — 23, `test/queue-ext.test.js` — 15,
+  `test/queue-e2e.test.js` — 1 (two real profiles), `test/catalog.test.js` — 8;
+  section 0.14
 - `lib/config.test.js` — 2, config merge and the 5s poll floor
 
 The suite is worth more than usual here, because the parts it covers are the

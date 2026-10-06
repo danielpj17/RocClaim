@@ -322,7 +322,7 @@ async function runWatchdog() {
 
 async function queueCall(path, body) {
   try {
-    const res = await fetch(ROCQueue.SERVER + path, {
+    const res = await fetch((await ROCQueue.serverUrl()) + path, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(body || {}),
@@ -340,10 +340,18 @@ async function queueCall(path, body) {
 }
 
 async function queueJoin(msg) {
-  const r = await queueCall('/api/queue/join', { name: msg.name, eventUrl: msg.eventUrl, stopAt: msg.stopAt });
+  const r = await queueCall('/api/queue/join', {
+    name: msg.name,
+    eventUrl: msg.eventUrl,
+    eventName: msg.eventName,
+    stopAt: msg.stopAt,
+    account: msg.account,
+  });
   if (!r.ok) return r;
+  // The game comes from the server's answer: someone joining a running queue
+  // named none, and gets whatever it is running.
   await set({
-    queueJoined: { name: msg.name, eventUrl: msg.eventUrl.split('#')[0], tabId: msg.tabId },
+    queueJoined: { name: msg.name, eventUrl: String(r.data.eventUrl).split('#')[0], tabId: null },
     queueTurn: r.data,
     queueError: null,
     queuePendingReport: null,
@@ -439,33 +447,56 @@ async function doQueueSync(prefetched, depth = 0) {
   let turn = prefetched || null;
   if (st.queuePendingReport) turn = (await sendReport(j, st.queuePendingReport)) || turn;
   if (!turn) {
-    const r = await queueCall('/api/queue/checkin', { name: j.name });
+    const { byuAccount } = await get(['byuAccount']);
+    const account = byuAccount && byuAccount.signedIn ? byuAccount.name : null;
+    const r = await queueCall('/api/queue/checkin', { name: j.name, account });
     turn = r.ok ? r.data : null;
     await set({ queueError: r.ok ? null : r.error });
   }
   if (turn) await set({ queueTurn: turn, queueSeenAt: Date.now() });
 
+  // The phone link. New every run (quick tunnels get a random hostname), so it
+  // has to travel -- and only the profile that started the queue sends it, or
+  // every profile would push the same link.
+  if (turn && turn.panelUrl && turn.startedBy === j.name) {
+    const { queuePanelPushed } = await get(['queuePanelPushed']);
+    if (queuePanelPushed !== turn.panelUrl) {
+      await set({ queuePanelPushed: turn.panelUrl });
+      await notify({
+        title: 'Queue started',
+        message: 'Control it from your phone (reorder, skip, stop):\n' + turn.panelUrl,
+        priority: 'default',
+        click: turn.panelUrl,
+      });
+    }
+  }
+
   const now = Date.now();
   const d = ROCQueue.decide(st, turn, now);
 
   if (d.action === 'arm' || d.action === 'resume') {
-    const tab = await queueTab(j);
-    if (!tab) {
-      await set({ queuePendingReport: { kind: 'skip', detail: 'the event tab was closed' } });
-      return depth < 2 ? doQueueSync(null, depth + 1) : undefined;
-    }
     const fresh = st.queueTurnSince !== turn.turnSince;
+    // Storage first, so the page's content script finds the watch armed when
+    // it loads.
     await set({
       ...ROCQueue.armFields(j.eventUrl, turn.stopAt, now),
       queueTurnSince: turn.turnSince,
       ...(d.action === 'resume' ? { claimResult: null } : {}),
     });
     await logLine('queue: ' + (d.action === 'resume' ? 'searching again -- ' : 'our turn -- ') + d.why);
+    // A waiting profile has no tab open; it gets one now.
     try {
-      if (String(tab.url || '').split('#')[0] === j.eventUrl) await chrome.tabs.reload(tab.id);
-      else await chrome.tabs.update(tab.id, { url: j.eventUrl });
+      const tab = await queueTab(j);
+      if (!tab) {
+        const t = await chrome.tabs.create({ url: j.eventUrl, active: false });
+        await set({ queueJoined: { ...j, tabId: t.id } });
+      } else if (String(tab.url || '').split('#')[0] === j.eventUrl) {
+        await chrome.tabs.reload(tab.id);
+      } else {
+        await chrome.tabs.update(tab.id, { url: j.eventUrl });
+      }
     } catch (err) {
-      await logLine('queue: could not load the event tab: ' + err.message);
+      await logLine('queue: could not open the event tab: ' + err.message);
     }
     if (d.action === 'resume') {
       await notify({

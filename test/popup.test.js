@@ -30,6 +30,11 @@ test.before(async () => {
     timeout: 30000,
     args: ['--headless=new', `--disable-extensions-except=${EXT}`, `--load-extension=${EXT}`],
   });
+  // The panel can open a BYU tab to load the sports list. Nothing in a test may
+  // reach the real site, so every BYU URL gets a stand-in page.
+  await ctx.route('https://byutickets.evenue.net/**', (r) =>
+    r.fulfill({ status: 200, contentType: 'text/html', body: '<html><body>stand-in</body></html>' })
+  );
   sw = ctx.serviceWorkers()[0] || (await ctx.waitForEvent('serviceworker', { timeout: 15000 }));
   // Node's URL parser reports origin "null" for the chrome-extension scheme, so
   // take the id straight out of the worker URL.
@@ -81,14 +86,14 @@ test('the script actually ran -- handlers are live, not just parsed', async () =
   await page.close();
 });
 
-test('Watch this tab refuses politely when the tab is not the portal', async () => {
+test('Watch refuses politely when no game is picked and no game page is in front', async () => {
   // The popup's active tab here is the popup itself, so this exercises the
   // guard rather than the arming path -- but it proves the handler is wired.
-  const { page } = await openPopup({ enabled: false });
+  const { page } = await openPopup({ enabled: false, picked: null });
   await page.click('#start');
   await page.waitForTimeout(400);
   const status = await page.locator('#status').innerText();
-  assert.match(status, /byutickets\.evenue\.net/i, 'should say where to be, got: ' + status);
+  assert.match(status, /Pick a sport and game/i, 'should say what to do, got: ' + status);
   const st = await sw.evaluate(() => chrome.storage.local.get(['enabled']));
   assert.notEqual(st.enabled, true, 'must not arm from the wrong page');
   await page.close();
@@ -174,26 +179,24 @@ async function frontTabAt(url) {
 }
 
 test('Watch refuses a BYU page that is not an event page', async () => {
-  const { page } = await openPopup({ enabled: false, targetUrl: null });
+  const { page } = await openPopup({ enabled: false, targetUrl: null, picked: null });
   const tab = await frontTabAt('https://byutickets.evenue.net/students/events/STFB');
   await page.waitForTimeout(400);
-  assert.match(await page.locator('#front').innerText(), /not a BYU event page/);
   // evaluate() rather than click(), so the listing tab stays the active one.
   await page.evaluate(() => document.getElementById('start').click());
   await page.waitForTimeout(400);
-  assert.match(await page.locator('#status').innerText(), /not an event page/);
+  assert.match(await page.locator('#status').innerText(), /Pick a sport and game/);
   const st = await sw.evaluate(() => chrome.storage.local.get(['enabled']));
   assert.notEqual(st.enabled, true, 'must not arm the listing page');
   await tab.close();
   await page.close();
 });
 
-test('Watch arms the event page that is in front', async () => {
-  const { page } = await openPopup({ enabled: false, targetUrl: null });
+test('with nothing picked, Watch arms the event page that is in front', async () => {
+  const { page } = await openPopup({ enabled: false, targetUrl: null, picked: null });
   const url = 'https://byutickets.evenue.net/students/event/F26/E01';
   const tab = await frontTabAt(url);
   await page.waitForTimeout(400);
-  assert.match(await page.locator('#front').innerText(), /\/students\/event\/F26\/E01/);
   await page.evaluate(() => document.getElementById('start').click());
   await page.waitForTimeout(400);
   const st = await sw.evaluate(() => chrome.storage.local.get(['enabled', 'targetUrl']));
@@ -201,5 +204,76 @@ test('Watch arms the event page that is in front', async () => {
   assert.equal(st.targetUrl, url);
   await sw.evaluate(() => chrome.storage.local.set({ enabled: false }));
   await tab.close();
+  await page.close();
+});
+
+// --- the game picker (2026-10-05) --------------------------------------------
+// Real chain: panel -> chrome.tabs.sendMessage -> catalog.js in a BYU tab ->
+// fetch of the (stand-in) BYU page -> parse -> dropdowns. The stand-ins are the
+// fixtures trimmed from recon/browse.har.
+
+test('the picker fills from a BYU tab, and Watch opens and arms the picked game', async (t) => {
+  const fx = (f) => fs.readFileSync(path.join(__dirname, 'fixtures', f), 'utf8');
+  const serve = (body) => (r) => r.fulfill({ status: 200, contentType: 'text/html', body });
+  await ctx.route('https://byutickets.evenue.net/students', serve(fx('byu-students.html')));
+  await ctx.route('https://byutickets.evenue.net/students/events/STFB', serve(fx('byu-events-STFB.html')));
+  await sw.evaluate(() =>
+    chrome.storage.local.set({ catalogSports: null, catalogEvents: null, picked: null, pickedSport: null, enabled: false })
+  );
+  const byu = await ctx.newPage();
+  await byu.goto('https://byutickets.evenue.net/students');
+
+  const { page, errors } = await openPopup();
+  await page.waitForFunction(() => document.getElementById('sport').options.length > 1, null, { timeout: 10000 });
+  const sports = await page.locator('#sport option').allInnerTexts();
+  assert.ok(sports.includes('Football') && sports.includes("Women's Volleyball"));
+  assert.ok(!sports.some((s) => /Ticket Return/.test(s)));
+
+  await page.selectOption('#sport', 'STFB');
+  await page.waitForFunction(() => document.getElementById('game').options[0].text !== 'Loading…', null, { timeout: 10000 });
+  const games = await page.locator('#game option').allInnerTexts();
+  assert.ok(!games.some((g) => /Request/.test(g)), 'no Tuesday request entries');
+  if (games.length < 2) {
+    // The fixture's season is over by this machine's clock. The parsing is
+    // still covered by test/catalog.test.js with a fixed date.
+    t.diagnostic('fixture games are all in the past now; skipping the arm half');
+    await byu.close();
+    await page.close();
+    return;
+  }
+
+  const value = await page.locator('#game option').nth(1).getAttribute('value');
+  await page.selectOption('#game', value);
+  await page.waitForTimeout(300);
+  const st = await sw.evaluate(() => chrome.storage.local.get(['picked']));
+  assert.equal(st.picked.url, value);
+  const kickoff = new Date(st.picked.eventAt);
+  const pad = (n) => String(n).padStart(2, '0');
+  assert.equal(
+    await page.inputValue('#stop-at'),
+    `${kickoff.getFullYear()}-${pad(kickoff.getMonth() + 1)}-${pad(kickoff.getDate())}T${pad(kickoff.getHours())}:${pad(kickoff.getMinutes())}`,
+    'picking a game sets the stop time to kickoff'
+  );
+
+  await page.evaluate(() => document.getElementById('start').click());
+  const armed = await (async () => {
+    for (let i = 0; i < 20; i++) {
+      const s = await sw.evaluate(() => chrome.storage.local.get(['enabled', 'targetUrl']));
+      if (s.enabled) return s;
+      await page.waitForTimeout(200);
+    }
+    return null;
+  })();
+  assert.ok(armed, 'armed');
+  assert.equal(armed.targetUrl, value);
+  let opened = false;
+  for (let i = 0; i < 25 && !opened; i++) {
+    opened = ctx.pages().some((p) => p.url() === value);
+    if (!opened) await page.waitForTimeout(200);
+  }
+  assert.ok(opened, 'a tab was opened on the game');
+  assert.deepEqual(errors, []);
+  await sw.evaluate(() => chrome.storage.local.set({ enabled: false }));
+  await byu.close();
   await page.close();
 });

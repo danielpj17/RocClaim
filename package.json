@@ -15,7 +15,9 @@
     "up:fake": "powershell -ExecutionPolicy Bypass -File ./start-all.ps1 -Fake",
     "down": "powershell -ExecutionPolicy Bypass -File ./stop-all.ps1",
     "recon:up": "powershell -ExecutionPolicy Bypass -File ./watch-recon.ps1",
-    "recon:down": "powershell -ExecutionPolicy Bypass -File ./stop-recon.ps1"
+    "recon:down": "powershell -ExecutionPolicy Bypass -File ./stop-recon.ps1",
+    "autostart": "powershell -ExecutionPolicy Bypass -File ./tools/autostart.ps1",
+    "autostart:off": "powershell -ExecutionPolicy Bypass -File ./tools/autostart.ps1 -Remove"
   },
   "dependencies": {
     "playwright": "^1.49.0"

@@ -3,9 +3,9 @@
 // per person. BYU pages are stand-ins served by Playwright, so nothing leaves
 // the machine and no seat is ever searched for for real.
 //
-// Needs port 4321, because that is the only address the extension is allowed
-// to reach. If the real server is running there, this file skips rather than
-// touch it.
+// Runs its own server on PORT, with its own state file and no tunnel, and points
+// the test profiles at it through the queueServer setting -- so the real server,
+// which runs from logon on 4321, is never touched.
 
 const test = require('node:test');
 const assert = require('node:assert');
@@ -18,13 +18,14 @@ const { chromium } = require('playwright');
 
 const ROOT = path.join(__dirname, '..');
 const EXT = path.join(ROOT, 'extension');
-const BASE = 'http://127.0.0.1:4321';
+const PORT = 4391; // not 4321: the real server runs there from logon
+const BASE = 'http://127.0.0.1:' + PORT;
 const EVENT = 'https://byutickets.evenue.net/students/event/F26/E01';
 
 const portFree = () =>
   new Promise((resolve) => {
     const s = net.createServer().once('error', () => resolve(false)).once('listening', () => s.close(() => resolve(true)));
-    s.listen(4321, '127.0.0.1');
+    s.listen(PORT, '127.0.0.1');
   });
 
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -59,6 +60,7 @@ async function profile(name) {
     r.fulfill({ status: 200, contentType: 'text/html', body: '<html><body>stand-in event page</body></html>' })
   );
   const sw = ctx.serviceWorkers()[0] || (await ctx.waitForEvent('serviceworker'));
+  await sw.evaluate((u) => chrome.storage.local.set({ queueServer: u }), BASE);
   const id = sw.url().split('/')[2];
   const panel = await ctx.newPage();
   await panel.goto(`chrome-extension://${id}/popup.html`);
@@ -83,13 +85,13 @@ async function join(p) {
 
 test('two profiles take turns', async (t) => {
   if (!(await portFree())) {
-    t.skip('port 4321 is in use (the real server?) -- not touching it');
+    t.skip('port ' + PORT + ' is in use -- not touching it');
     return;
   }
   tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'roc-q-state-'));
   server = spawn(process.execPath, [path.join(ROOT, 'server.js'), '--fake'], {
     cwd: ROOT,
-    env: { ...process.env, ROC_QUEUE_FILE: path.join(tmp, 'queue.json') },
+    env: { ...process.env, ROC_QUEUE_FILE: path.join(tmp, 'queue.json'), ROC_NO_TUNNEL: '1', ROC_PORT: String(PORT) },
     stdio: 'ignore',
   });
   assert.ok(await until(() => api('/api/queue').catch(() => null)), 'server came up');
@@ -115,6 +117,10 @@ test('two profiles take turns', async (t) => {
   assert.notEqual(w1.enabled, true, 'only one person searches at a time');
   assert.equal(w1.queueTurn.current, 'Daniel');
   assert.match(await wife.panel.locator('#queueStatus').innerText(), /Waiting\. Up now: Daniel/);
+  assert.equal(w1.queueJoined.eventUrl, EVENT, 'she joined the running game without picking one');
+
+  // A waiting profile needs no tab open. Hers is closed; her turn must open one.
+  await wife.tab.close();
 
   // Daniel's seat is found and his order placed -- the same two writes
   // content.js and cart.js make.
@@ -140,6 +146,7 @@ test('two profiles take turns', async (t) => {
   });
   assert.ok(w2, "Wife's profile started searching on her turn");
   assert.equal(w2.targetUrl, EVENT);
+  assert.ok(await until(() => wife.ctx.pages().some((p) => p.url() === EVENT)), 'her turn opened the game tab');
 
   // Daniel's profile, checking in, does not start again.
   await daniel.sw.evaluate(() => queueSync());

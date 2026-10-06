@@ -81,6 +81,23 @@
   </head>
   <body>
     <h1>ROC Claim Watcher</h1>
+    <div class="hint" id="account" style="margin-top:-6px">BYU account: checking&hellip;</div>
+
+    <label for="sport">Game</label>
+    <div style="display:flex;gap:6px">
+      <select id="sport" style="flex:1;min-width:0;box-sizing:border-box;padding:6px 7px;font:inherit;border:1px solid #8884;border-radius:5px;background:#8881;color:inherit">
+        <option value="">Sport&hellip;</option>
+      </select>
+      <button id="refreshCatalog" title="Reload the sports and games from BYU" style="flex:none;padding:6px 9px;background:#8883;color:inherit;font-weight:400">&#8635;</button>
+    </div>
+    <select id="game" style="width:100%;margin-top:6px;box-sizing:border-box;padding:6px 7px;font:inherit;border:1px solid #8884;border-radius:5px;background:#8881;color:inherit">
+      <option value="">Pick a sport first</option>
+    </select>
+    <div class="hint" id="gameInfo"></div>
+
+    <label for="stop-at">Stop at</label>
+    <input id="stop-at" type="datetime-local" />
+    <div class="hint">Hard stop. Picking a game sets it to kickoff; change it if you'd stop earlier.</div>
 
     <label for="provider">Notify my phone via</label>
     <select id="provider" style="width:100%;box-sizing:border-box;padding:6px 7px;font:inherit;border:1px solid #8884;border-radius:5px;background:#8881;color:inherit">
@@ -115,9 +132,6 @@
       <input id="discordUrl" placeholder="https://discord.com/api/webhooks/..." />
     </div>
 
-    <label for="stop-at">Stop at</label>
-    <input id="stop-at" type="datetime-local" />
-    <div class="hint">Hard stop. Don't leave it running past when you'd actually go.</div>
 
     <label style="display:flex;align-items:center;gap:8px;margin-top:14px;font-weight:600;font-size:12px">
       <input type="checkbox" id="autoclaim" style="width:auto;margin:0" />
@@ -149,7 +163,7 @@
       <button id="stop">Stop</button>
       <button id="test" title="Send a test push">Test</button>
     </div>
-    <div class="hint" id="front"></div>
+    
 
     <div class="status" id="status">…</div>
 
@@ -167,6 +181,7 @@
 
     <script src="push.js"></script>
     <script src="queue.js"></script>
+    <script src="catalog.js"></script>
     <script src="popup.js"></script>
   </body>
 </html>

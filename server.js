@@ -17,8 +17,12 @@ const { createSite } = require('./lib/site');
 const { Watcher } = require('./watcher');
 const { createAuth, loadOrCreateToken } = require('./lib/panel-auth');
 const { Queue } = require('./lib/queue');
+const { createTunnel } = require('./lib/tunnel');
 
 const config = loadConfig();
+// Tests run a private server on another port so they never touch the real one,
+// which runs from logon (tools/autostart.ps1).
+if (process.env.ROC_PORT) config.port = Number(process.env.ROC_PORT);
 const SITE_KIND = process.argv.includes('--fake') ? 'fake' : 'byu';
 const auth = createAuth(loadOrCreateToken());
 
@@ -40,6 +44,21 @@ function loadQueueState() {
 const queue = new Queue({ state: loadQueueState() });
 function saveQueue() {
   fs.writeFileSync(QUEUE_FILE, JSON.stringify(queue, null, 1));
+  syncTunnel();
+}
+
+// The phone link exists only while a queue runs. See lib/tunnel.js.
+const tunnel = createTunnel({
+  port: config.port,
+  token: auth.token,
+  log: (level, message) => log(level, message),
+  // npm run down (stop-all.ps1) stops it by this file, even if the server is
+  // killed too hard to close it itself.
+  pidFile: path.join(__dirname, 'logs', 'tunnel.pid'),
+});
+function syncTunnel() {
+  if (queue.running) tunnel.start();
+  else tunnel.stop();
 }
 
 function pushLog(entry) {
@@ -138,8 +157,9 @@ const STATIC = {
 // Queue routes: the extension in each Chrome profile, and the panel.
 const QUEUE_ROUTES = {
   '/api/queue/people': (b) => queue.setPeople(b.people),
-  '/api/queue/join': (b) => queue.join({ name: b.name, eventUrl: b.eventUrl, stopAt: b.stopAt }),
-  '/api/queue/checkin': (b) => queue.checkin(b.name),
+  '/api/queue/join': (b) =>
+    queue.join({ name: b.name, eventUrl: b.eventUrl, eventName: b.eventName, stopAt: b.stopAt, account: b.account }),
+  '/api/queue/checkin': (b) => queue.checkin(b.name, b.account),
   '/api/queue/report': (b) => queue.report({ name: b.name, kind: b.kind, detail: b.detail }),
   '/api/queue/skip': () => queue.skipCurrent(),
   '/api/queue/stop': () => queue.stop(),
@@ -176,7 +196,7 @@ const server = http.createServer(async (req, res) => {
     if (req.method === 'GET' && route === '/api/queue') {
       const snap = queue.snapshot();
       saveQueue(); // snapshot() runs the clock rules, which can change state
-      return json(res, 200, snap);
+      return json(res, 200, { ...snap, panelUrl: tunnel.url });
     }
 
     if (req.method === 'POST' && QUEUE_ROUTES[route]) {
@@ -188,11 +208,13 @@ const server = http.createServer(async (req, res) => {
         return json(res, 415, { error: 'send application/json' });
       }
       const body = await readBody(req);
+      let out;
       try {
-        return json(res, 200, QUEUE_ROUTES[route](body));
+        out = QUEUE_ROUTES[route](body);
       } finally {
         saveQueue();
       }
+      return json(res, 200, { ...out, panelUrl: tunnel.url });
     }
 
     if (req.method === 'GET' && route === '/api/status') {
@@ -245,7 +267,21 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
+// Already in use = the server is already running (it starts at login). Say so
+// and leave, rather than crash with a stack trace.
+server.on('error', (err) => {
+  if (err.code === 'EADDRINUSE') {
+    console.log(`Port ${config.port} is in use -- the ROC server is probably already running.`);
+    process.exit(0);
+  }
+  throw err;
+});
+
 server.listen(config.port, '127.0.0.1', () => {
+  // A queue that was running when the server last stopped needs its phone
+  // link back.
+  queue.tick();
+  saveQueue();
   console.log(`\n  ROC Claim control panel: http://localhost:${config.port}`);
   console.log(`  Remote key: ${auth.token}  (needed only through the tunnel)`);
   console.log(`  Site adapter: ${SITE_KIND}${SITE_KIND === 'fake' ? '  (nothing real is contacted)' : ''}`);
@@ -256,6 +292,7 @@ server.listen(config.port, '127.0.0.1', () => {
 });
 
 function shutdown() {
+  tunnel.stop();
   if (watcher && watcher.status === 'running') watcher.requestStop('stopped-by-user');
   server.close(() => process.exit(0));
   setTimeout(() => process.exit(0), 2000).unref();

@@ -24,6 +24,17 @@
 (function (root) {
   const SERVER = 'http://127.0.0.1:4321';
 
+  // The address actually used: storage can point it elsewhere, which is how the
+  // tests run a private server without touching the real one on 4321.
+  async function serverUrl() {
+    try {
+      const { queueServer } = await chrome.storage.local.get(['queueServer']);
+      return queueServer || SERVER;
+    } catch {
+      return SERVER;
+    }
+  }
+
   // The hold is ten minutes (CLAUDE.md 0.7). Two more for a checkout that is
   // mid-click when it runs out, before deciding nobody is finishing it.
   const HOLD_RESUME_MS = 12 * 60 * 1000;
@@ -124,7 +135,7 @@
     return turn.order.map((e) => e.name + (mark[e.state] || '')).join(' → ');
   }
 
-  const api = { SERVER, HOLD_RESUME_MS, classifyStop, decide, armFields, titleFor, orderLine, seatThisTurn };
+  const api = { SERVER, serverUrl, HOLD_RESUME_MS, classifyStop, decide, armFields, titleFor, orderLine, seatThisTurn };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.ROCQueue = api;
 })(typeof self !== 'undefined' ? self : this);

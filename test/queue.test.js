@@ -196,3 +196,26 @@ test('skip and stop from the panel', () => {
   assert.equal(q.run.status, 'finished');
   assert.throws(() => q.stop(), /not running/);
 });
+
+test('later people join the running game without naming it', () => {
+  const { q, stopAt } = make();
+  q.join({ name: 'Daniel', eventUrl: EVENT, eventName: 'BYU vs Iowa State', stopAt });
+  const t = q.join({ name: 'Wife' });
+  assert.equal(t.eventUrl, EVENT);
+  assert.equal(t.eventName, 'BYU vs Iowa State');
+  assert.equal(t.startedBy, 'Daniel');
+});
+
+test('with nothing running, a game must be picked', () => {
+  const { q, stopAt } = make();
+  assert.throws(() => q.join({ name: 'Daniel', stopAt }), /Pick a game/);
+});
+
+test('each profile reports which BYU account it is signed into', () => {
+  const { q, stopAt } = make();
+  q.join({ name: 'Daniel', eventUrl: EVENT, stopAt, account: 'Daniel Johnson' });
+  q.checkin('Wife', 'Daniel Johnson'); // wrong account in her profile -- visible on the panel
+  const people = q.snapshot().people;
+  assert.equal(people.find((p) => p.name === 'Daniel').account, 'Daniel Johnson');
+  assert.equal(people.find((p) => p.name === 'Wife').account, 'Daniel Johnson');
+});

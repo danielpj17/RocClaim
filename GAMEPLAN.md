@@ -92,7 +92,7 @@ Rules carried over from the branch either way:
 - Each person needs their own ROC pass. Never claim on one account for
   someone else; claims are non-transferable.
 
-## Step 3 — fixing things from the phone
+## Step 3 — fixing things from the phone — phone link now opens with each queue (CLAUDE.md 0.14)
 
 - Start, stop and reorder: the tunnel UI from section 11 already covers this.
 - **Re-signing in** someone whose session expired can't be done through the
