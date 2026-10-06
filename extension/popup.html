@@ -145,21 +145,27 @@
 
     <label style="display:flex;align-items:center;gap:8px;margin-top:14px;font-weight:600;font-size:12px">
       <input type="checkbox" id="queueOn" style="width:auto;margin:0" />
-      Take turns with other people (queue)
+      Take turns: one ticket each, in order
     </label>
     <div id="queueFields" hidden>
-      <label for="queueName">This profile is</label>
-      <input id="queueName" placeholder="e.g. Daniel" maxlength="40" />
+      <ul id="people" style="list-style:none;margin:8px 0 0;padding:0"></ul>
+      <div style="display:flex;gap:6px;margin-top:8px">
+        <input id="saveName" placeholder="Name, e.g. Daniel" maxlength="40" style="flex:1;min-width:0" />
+        <button id="saveSignin" style="flex:none;padding:6px 9px;background:#8883;color:inherit;font-weight:400">Save who's signed in</button>
+      </div>
+      <button id="addAnother" style="width:100%;margin-top:6px;padding:7px;background:#8883;color:inherit;font-weight:400">
+        Add another person (signs out here only)
+      </button>
       <div class="hint">
-        One Chrome profile per person, signed in to their own BYU account. Needs the
-        queue server running on this laptop (<b>npm run up</b>). Order and skips:
-        <b>localhost:4321</b> or the phone link. Stop here ends the whole queue.
+        Each person signs in to BYU themselves, once, then press <b>Save who's signed in</b>.
+        No passwords are stored. <b>Don't press BYU's own Sign Out</b> for a saved person &mdash;
+        that ends their saved sign-in; use <b>Add another person</b> instead.
       </div>
     </div>
     <div class="status" id="queueStatus" hidden></div>
 
     <div class="row">
-      <button id="start">Watch this tab</button>
+      <button id="start">Watch</button>
       <button id="stop">Stop</button>
       <button id="test" title="Send a test push">Test</button>
     </div>

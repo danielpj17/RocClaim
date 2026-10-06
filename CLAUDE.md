@@ -787,6 +787,60 @@ shown per person on the queue page.
 through the extension's `queueServer` setting, because the real server now always
 holds 4321. Host permission is `http://127.0.0.1/*` (any port) for that reason.
 
+## 0.15. ONE WINDOW: saved sign-ins, swapped per turn (2026-10-05) -- SUPERSEDES 0.14's queue
+
+Daniel did not want one Chrome profile per person. He wanted one window where
+each person signs in once and the extension switches between them. Built that.
+**The multi-profile queue of 0.14 is gone from the extension**: no server, no
+joining, no check-ins. The queue now lives entirely in `extension/`.
+
+Storing passwords and auto-typing them was refused, and stays refused: section 4
+covers every account, and both of his HARs show a PerimeterX press-and-hold
+right after sign-in, which an unattended login could not clear and must not
+solve. What is saved instead is **the cookies BYU hands back after the person
+signs in themselves**.
+
+```
+extension/session.js   save / clear / restore the site's cookies (chrome.cookies)
+extension/queue.js     pure rules: start, report, holdAction, classifyStop
+extension/background.js  "the queue: saved sign-ins" section -- runs the turns
+extension/popup.*      People list (Save who's signed in / Add another person /
+                       Use / reorder / untick) and the live queue box
+```
+
+Rules worth not "simplifying":
+
+- **Bot-protection cookies never move.** `_px*`, `pxcts`, `__cf*`, `cf_*` are
+  never saved, cleared or restored -- that would be resetting the bot check
+  (section 0). Only the site's own cookies swap. `test/one-window.test.js`
+  carries a `_px3` through every switch; verified it fails if that rule is off.
+- **No search until BYU confirms the account.** After every swap the worker
+  loads /students and asks `/pac-api/accounts` (via catalog.js in the tab). No
+  name, or the wrong name, = skip with a push. Never search or claim on the wrong
+  account. Verified the expired-sign-in test fails if that check is removed.
+- **"Add another person" signs out locally only** -- it never calls BYU's
+  sign-out, so the saved sign-in stays valid server-side. BYU's own Sign Out
+  button DOES end a saved sign-in; the panel says so.
+- **Sign-ins are re-saved whenever someone stops being active**, since cookies
+  rotate as they are used. Only after BYU confirms whose they are.
+- **Cookies are addressed through `https://byutickets.evenue.net`** and the
+  manifest has `https://evenue.net/*`. Without both, parent-domain cookies
+  (`.evenue.net`) cannot be seen or removed and the swap silently half-works --
+  this was a real bug, caught by the e2e test.
+- **The queue ends with the browser back on the sign-in it started with.**
+- A human check now ends the whole queue again (abort): one window shares one
+  browser, and its bot-check state, so the next person would hit it too.
+
+**Unknown until the first real run:** how long a saved sign-in lasts while it
+sits unused, and which of BYU's cookies are the sign-in (the HARs were saved
+sanitized, so no cookie names). The design does not depend on knowing either:
+it swaps all non-protected site cookies and lets the account check decide.
+
+**Left behind by the change:** `lib/queue.js`, the `/api/queue/*` routes,
+`public/queue.html`, `lib/tunnel.js` and the autostart logon task were built
+for 0.14 and are no longer used by the extension. Kept for now in case phone
+control comes back via the server; delete them if it does not.
+
 ---
 
 ## 1. What this is
@@ -1399,7 +1453,7 @@ countdown is not a change, "COMING SOON" becoming "Buy" *is*, and
 
 ## 13. Test suite
 
-**258 tests, all passing** (`npm test`), 49 of them driving real headless
+**265 tests, all passing** (`npm test`), 49 of them driving real headless
 Chromium against real DOM.
 
 - `test/watcher.test.js` — 16, fake clock, no network
@@ -1430,9 +1484,10 @@ Chromium against real DOM.
   appears once: the body already ends with the order URL, so the click target
   is not appended after it again (Telegram and Discord render it inline; ntfy
   carries it as a header and never showed it twice).
-- `test/queue.test.js` — 23, `test/queue-ext.test.js` — 15,
-  `test/queue-e2e.test.js` — 1 (two real profiles), `test/catalog.test.js` — 8;
-  section 0.14
+- `test/queue-ext.test.js` — 13 (one-window rules), `test/session.test.js` — 5,
+  `test/one-window.test.js` — 5 (real Chrome, cookie swaps checked in the real
+  jar), `test/catalog.test.js` — 8; sections 0.14-0.15. `test/queue.test.js`
+  (23) covers the now-unused server queue.
 - `lib/config.test.js` — 2, config merge and the 5s poll floor
 
 The suite is worth more than usual here, because the parts it covers are the

@@ -191,87 +191,209 @@ async function loadAccount() {
   $('account').style.color = r.data.signedIn ? '' : '#c33';
 }
 
-// What a running queue looks like from here, for a profile that has not joined
-// yet: it can join without picking anything.
+// --- people and the queue ------------------------------------------------------
 //
-// Only while "Take turns" is ticked: a solo watch has no use for the server,
-// and on Windows a refused connection takes ~2s and logs an error.
-let serverQueue = null;
-async function pollServerQueue() {
-  if (!$('queueOn').checked) return;
-  try {
-    const res = await fetch((await ROCQueue.serverUrl()) + '/api/queue');
-    serverQueue = res.ok ? await res.json() : null;
-  } catch {
-    serverQueue = null;
-  }
+// The saved sign-ins and the running queue, both read from storage on every
+// render. All the work -- saving, swapping, running turns -- happens in the
+// worker; this only asks for it and shows the result. Built with textContent,
+// not innerHTML: names are typed in, and this page has extension privileges.
+
+function send(msg) {
+  return new Promise((resolve) =>
+    chrome.runtime.sendMessage(msg, (res) => {
+      void chrome.runtime.lastError;
+      resolve(res || { ok: false, error: 'no answer from the extension' });
+    })
+  );
 }
-const queueRunning = () => !!(serverQueue && serverQueue.run && serverQueue.run.status === 'running');
 
-// The queue box. Built with textContent, not innerHTML: the names are typed in
-// by people, and this page has extension privileges.
-function renderQueue(st) {
-  if (!$('queueName').dataset.touched && st.queueName && !$('queueName').value) $('queueName').value = st.queueName;
-  const on = !!(st.queueOn || st.queueJoined);
-  $('queueOn').checked = on;
-  $('queueOn').disabled = !!st.queueJoined; // leave with Stop, not by unticking
-  $('queueName').disabled = !!st.queueJoined;
-  $('queueFields').hidden = !on;
-  $('start').textContent = st.queueJoined
-    ? 'In the queue'
-    : on && queueRunning()
-      ? 'Join the queue'
-      : on
-        ? 'Start the queue'
-        : 'Watch';
-  $('start').disabled = !!st.queueJoined;
+function el(tag, props, ...kids) {
+  const n = Object.assign(document.createElement(tag), props || {});
+  for (const k of kids) if (k != null) n.append(k);
+  return n;
+}
 
+let peopleKey = '';
+function renderPeople(people, running) {
+  const key = JSON.stringify([people, running]);
+  if (key === peopleKey) return; // do not rebuild the list out from under a click
+  peopleKey = key;
+  const ul = $('people');
+  ul.replaceChildren();
+  if (!people.length) {
+    ul.append(el('li', { className: 'hint', textContent: 'Nobody saved yet. Sign in to BYU, type a name below, press Save.' }));
+    return;
+  }
+  const btn = (text, act, i, title, disabled) =>
+    el('button', {
+      textContent: text,
+      title,
+      disabled: !!disabled,
+      style: 'flex:none;padding:3px 7px;background:#8883;color:inherit;font-weight:400',
+    });
+  people.forEach((p, i) => {
+    const mk = (text, act, title, disabled) => {
+      const b = btn(text, act, i, title, disabled);
+      b.dataset.act = act;
+      b.dataset.i = String(i);
+      return b;
+    };
+    const on = el('input', { type: 'checkbox', checked: p.on !== false, disabled: running, style: 'width:auto;margin:0' });
+    on.dataset.i = String(i);
+    on.dataset.act = 'on';
+    ul.append(
+      el(
+        'li',
+        { style: 'display:flex;align-items:center;gap:5px;padding:4px 0;border-bottom:1px solid #8882' },
+        on,
+        el(
+          'span',
+          { style: 'flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap' },
+          el('b', { textContent: (i + 1) + '. ' + p.name }),
+          el('span', { className: 'muted', textContent: ' ' + (p.account || '') })
+        ),
+        mk('↑', 'up', 'Move up', running || i === 0),
+        mk('↓', 'down', 'Move down', running || i === people.length - 1),
+        mk('Use', 'use', 'Switch this browser to ' + p.name + "'s sign-in", running),
+        mk('×', 'remove', 'Forget ' + p.name + "'s saved sign-in", running)
+      )
+    );
+  });
+}
+
+// The queue as a list, the person searching on top of mind.
+function renderRun(run, on) {
   const box = $('queueStatus');
-  box.style.whiteSpace = 'pre-wrap';
-  if (!st.queueJoined) {
-    // Not in it yet: say what pressing the button will do.
-    if (!on) {
-      box.hidden = true;
-    } else if (queueRunning()) {
-      const r = serverQueue.run;
-      box.hidden = false;
-      box.textContent =
-        'Running for ' + (r.eventName || r.eventUrl.replace(/^https:\/\/[^/]+/, '')) +
-        ' (stops ' + fmt(r.stopAt) + ').\n' + ROCQueue.orderLine({ order: r.order }) +
-        '\nJoin uses this game and stop time -- no need to pick one.';
-    } else if (!serverQueue) {
-      box.hidden = false;
-      box.textContent = 'The queue server is not running. It starts with Windows; if this persists, run npm run autostart once.';
-    } else {
-      box.hidden = false;
-      box.textContent = 'No queue running. Pick a game and stop time, and this starts one.';
-    }
+  if (!on && !(run && run.status === 'running')) {
+    box.hidden = true;
     return;
   }
   box.hidden = false;
-  const t = st.queueTurn;
-  const lines = [];
-  if (st.queueError) lines.push('Cannot reach the queue: ' + st.queueError);
-  if (t && t.status === 'running') {
-    lines.push(
-      t.myTurn
-        ? st.queueJoined.name + "'s turn -- searching" + (t.next ? ' (next: ' + t.next + ')' : '')
-        : 'Waiting. Up now: ' + (t.current || '--') + '. Not searching, so no load on BYU.'
-    );
-    lines.push(ROCQueue.orderLine(t));
-    if (t.stopAt) lines.push('Queue stops at ' + fmt(t.stopAt));
-  } else if (t) {
-    lines.push('Queue finished' + (t.outcome ? ': ' + t.outcome : ''));
+  box.replaceChildren();
+  if (!run) {
+    box.append(el('div', { className: 'muted', textContent: 'Not started. Pick a game and stop time, then Start the queue.' }));
+    return;
   }
-  if (st.queueSeenAt) lines.push('last check-in ' + fmt(st.queueSeenAt));
-  box.textContent = lines.join('\n');
+  const live = run.status === 'running';
+  box.append(
+    el('div', {
+      textContent: (live ? 'Queue running' : 'Last queue') + (run.eventName ? ': ' + run.eventName : ''),
+      style: 'font-weight:700;margin-bottom:4px',
+    })
+  );
+  let nextShown = false;
+  for (const e of run.order) {
+    let text;
+    let style = '';
+    if (e.state === 'up') {
+      text = '▶ ' + e.name + ' — searching now';
+      style = 'color:#0a7d3c;font-weight:700';
+    } else if (e.state === 'pending') {
+      text = '   ' + e.name + ' — ' + (nextShown ? 'waiting' : 'next');
+      nextShown = true;
+    } else if (e.state === 'claimed') {
+      text = '✓ ' + e.name + ' — ticket claimed';
+    } else if (e.state === 'skipped') {
+      text = '✗ ' + e.name + ' — skipped' + (e.note ? ': ' + e.note : '');
+      style = 'color:#a33';
+    } else {
+      text = '  ' + e.name + ' — ' + e.state.replace('-', ' ');
+      style = 'opacity:.6';
+    }
+    box.append(el('div', { textContent: text, style: 'white-space:pre-wrap;' + style }));
+  }
+  box.append(
+    el('div', {
+      className: 'muted',
+      textContent: live ? 'Stops at ' + fmt(run.stopAt) + '. Stop ends the whole queue.' : run.outcome || '',
+      style: 'margin-top:4px',
+    })
+  );
 }
+
+function renderQueue(st) {
+  const running = !!(st.run && st.run.status === 'running');
+  const on = !!(st.queueOn || running);
+  $('queueOn').checked = on;
+  $('queueOn').disabled = running;
+  $('queueFields').hidden = !on;
+  $('start').textContent = running ? 'Queue running' : on ? 'Start the queue' : 'Watch';
+  $('start').disabled = running;
+  $('saveSignin').disabled = running;
+  $('addAnother').disabled = running;
+  renderPeople(st.people || [], running);
+  renderRun(st.run, on);
+}
+
+$('people').addEventListener('change', async (e) => {
+  if (e.target.dataset.act !== 'on') return;
+  const { people = [] } = await get(['people']);
+  const p = people[Number(e.target.dataset.i)];
+  if (p) p.on = e.target.checked;
+  await set({ people });
+  await render();
+});
+
+$('people').addEventListener('click', async (e) => {
+  const b = e.target.closest('button');
+  if (!b || !b.dataset.act) return;
+  const { people = [], sessions = {} } = await get(['people', 'sessions']);
+  const i = Number(b.dataset.i);
+  const p = people[i];
+  if (!p) return;
+  if (b.dataset.act === 'up' || b.dataset.act === 'down') {
+    const j = b.dataset.act === 'up' ? i - 1 : i + 1;
+    if (j < 0 || j >= people.length) return;
+    [people[i], people[j]] = [people[j], people[i]];
+    await set({ people });
+  } else if (b.dataset.act === 'remove') {
+    // Confirm in place; the panel cannot rely on confirm() dialogs.
+    if (b.dataset.armed !== '1') {
+      b.dataset.armed = '1';
+      b.textContent = 'Sure?';
+      setTimeout(() => (peopleKey = ''), 4000);
+      return;
+    }
+    people.splice(i, 1);
+    delete sessions[p.id];
+    await set({ people, sessions });
+  } else if (b.dataset.act === 'use') {
+    $('status').textContent = 'Switching to ' + p.name + '...';
+    const r = await send({ type: 'session-switch', id: p.id });
+    $('status').textContent = r.ok ? 'This browser is now signed in as ' + p.name + '.' : 'Could not switch: ' + r.error;
+    await loadAccount();
+  }
+  await render();
+});
+
+$('saveSignin').addEventListener('click', async () => {
+  $('status').textContent = 'Saving...';
+  const r = await send({ type: 'session-save', name: $('saveName').value });
+  if (r.ok) {
+    $('saveName').value = '';
+    $('status').textContent = 'Saved ' + r.person.name + ' (' + r.person.account + ').';
+  } else {
+    $('status').textContent = 'Not saved: ' + r.error;
+  }
+  await loadAccount();
+  await render();
+});
+
+$('addAnother').addEventListener('click', async () => {
+  $('status').textContent = 'Signing out here...';
+  const r = await send({ type: 'session-add-another' });
+  $('status').textContent = r.ok
+    ? "Signed out in this browser only. Have the next person sign in on the BYU tab, then type their name and press Save who's signed in."
+    : 'Not done: ' + r.error;
+  await loadAccount();
+  await render();
+});
 
 async function render() {
   const st = await get([
     'enabled', 'targetUrl', 'stopAt', 'polls', 'lastCheck',
     'stoppedReason', 'stoppedAt', 'topic', 'log', 'provider', 'tgToken', 'tgChat', 'discordUrl', 'cartSnapshot', 'cartSnapshotAt', 'cartPages', 'lastRawAnswer', 'autoClaim', 'claimResult', 'lastResult', 'nextPollAt', 'lastSnapshot',
-    'queueOn', 'queueName', 'queueJoined', 'queueTurn', 'queueError', 'queueSeenAt',
+    'queueOn', 'people', 'run',
   ]);
   renderQueue(st);
 
@@ -428,62 +550,29 @@ function refuse(text) {
 $('start').addEventListener('click', async () => {
   const topic = $('topic').value.trim();
   const queueMode = $('queueOn').checked;
-  if (queueMode) await pollServerQueue();
-  // Joining a running queue takes ITS game and stop time: one of each for
-  // everyone. So nothing needs picking.
-  const joining = queueMode && queueRunning();
 
-  const game = joining ? null : await targetGame();
-  if (!joining && !game) {
+  const game = await targetGame();
+  if (!game) {
     refuse('Pick a sport and game above first.');
     return;
   }
-
-  let stopAt = null;
-  if (!joining) {
-    const stopRaw = $('stop-at').value;
-    if (!stopRaw) {
-      refuse('Set a stop time first. A watcher with no end is how you claim a ticket you never use.');
-      return;
-    }
-    stopAt = new Date(stopRaw).getTime();
-    if (!(stopAt > Date.now())) {
-      refuse('That stop time is already in the past.');
-      return;
-    }
+  const stopRaw = $('stop-at').value;
+  if (!stopRaw) {
+    refuse('Set a stop time first. A watcher with no end is how you claim a ticket you never use.');
+    return;
+  }
+  const stopAt = new Date(stopRaw).getTime();
+  if (!(stopAt > Date.now())) {
+    refuse('That stop time is already in the past.');
+    return;
   }
 
   if (queueMode) {
-    // The queue decides when this profile searches; the worker opens and arms
-    // the game when the server says it is our turn.
-    const name = $('queueName').value.trim();
-    if (!name) {
-      refuse('Type whose profile this is first -- every push and the queue order use that name.');
-      return;
-    }
-    const { byuAccount } = await get(['byuAccount']);
-    await set({ topic, queueName: name });
-    $('status').textContent = joining ? 'Joining the queue...' : 'Starting the queue...';
-    const r = await new Promise((resolve) =>
-      chrome.runtime.sendMessage(
-        {
-          type: 'queue-join',
-          name,
-          eventUrl: game ? game.url : null,
-          eventName: game ? game.name : null,
-          stopAt,
-          account: byuAccount && byuAccount.signedIn ? byuAccount.name : null,
-        },
-        (res) => {
-          void chrome.runtime.lastError;
-          resolve(res);
-        }
-      )
-    );
-    if (!r || !r.ok) {
-      refuse((r && r.error) || 'no answer from the extension');
-      return;
-    }
+    // The worker switches sign-ins and runs the turns.
+    await set({ topic });
+    $('status').textContent = 'Starting the queue...';
+    const r = await send({ type: 'queue-start', eventUrl: game.url, eventName: game.name, stopAt });
+    if (!r.ok) refuse(r.error);
     await render();
     return;
   }
@@ -499,16 +588,11 @@ $('start').addEventListener('click', async () => {
 });
 
 $('stop').addEventListener('click', async () => {
-  const { queueJoined } = await get(['queueJoined']);
-  if (queueJoined) {
-    // Ends the whole queue, for every profile -- the hint under the box says so.
-    const r = await new Promise((resolve) =>
-      chrome.runtime.sendMessage({ type: 'queue-stop' }, (res) => {
-        void chrome.runtime.lastError;
-        resolve(res);
-      })
-    );
-    if (r && !r.ok) $('status').textContent = 'Stopped here, but the queue server did not hear it: ' + r.error;
+  const { run } = await get(['run']);
+  if (run && run.status === 'running') {
+    // Ends the whole queue and puts the browser back on its original sign-in.
+    const r = await send({ type: 'queue-stop' });
+    if (!r.ok) $('status').textContent = r.error;
   } else {
     await set({ enabled: false, stoppedReason: 'stopped by you', stoppedAt: Date.now() });
   }
@@ -518,11 +602,7 @@ $('stop').addEventListener('click', async () => {
 $('queueOn').addEventListener('change', async () => {
   await set({ queueOn: $('queueOn').checked });
   await render();
-  await pollServerQueue();
-  await render();
 });
-$('queueName').addEventListener('input', () => ($('queueName').dataset.touched = '1'));
-$('queueName').addEventListener('change', () => set({ queueName: $('queueName').value.trim() }));
 
 $('test').addEventListener('click', async () => {
   await saveProvider();
@@ -598,8 +678,6 @@ $('autoclaim').addEventListener('change', async () => {
   }
   await render();
   setInterval(render, 2000);
-  pollServerQueue().then(render);
-  setInterval(pollServerQueue, 5000);
 
   const { picked, pickedSport, catalogEvents } = await get(['picked', 'pickedSport', 'catalogEvents']);
   showGameInfo(picked);

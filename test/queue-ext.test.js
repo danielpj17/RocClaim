@@ -1,68 +1,86 @@
-// The extension's side of the queue (extension/queue.js): what one profile does
-// with the server's answer. Pure, no browser.
+// The one-window queue's rules (extension/queue.js). Pure, no browser.
 
 const test = require('node:test');
 const assert = require('node:assert');
+const fs = require('node:fs');
+const path = require('node:path');
 const Q = require('../extension/queue');
 
+const EVENT = 'https://byutickets.evenue.net/students/event/F26/E03';
 const NOW = 10_000_000;
-const turn = (over = {}) => ({
-  status: 'running', myTurn: true, current: 'Daniel', next: 'Wife', turnSince: NOW - 60_000,
-  stopAt: NOW + 3_600_000, order: [], ...over,
+const HOUR = 3_600_000;
+const PEOPLE = [
+  { id: 'a', name: 'Daniel', account: 'Daniel Johnson' },
+  { id: 'b', name: 'Wife', account: 'Wife Johnson' },
+  { id: 'c', name: 'Sam', account: 'Sam Smith', on: false },
+];
+const startRun = () => Q.start({ people: PEOPLE, eventUrl: EVENT, eventName: 'BYU vs Iowa State', stopAt: NOW + HOUR, now: NOW });
+const states = (run) => run.order.map((e) => e.name + ':' + e.state).join(' ');
+
+test('starts with the first ticked person up; unticked people are left out', () => {
+  const run = startRun();
+  assert.equal(states(run), 'Daniel:up Wife:pending');
+  assert.equal(Q.up(run).name, 'Daniel');
+  assert.equal(Q.next(run).name, 'Wife');
 });
 
-test('our turn and idle -> arm', () => {
-  assert.equal(Q.decide({ enabled: false }, turn(), NOW).action, 'arm');
+test('a placed order moves to the next person; the last one finishes the queue', () => {
+  const run = startRun();
+  Q.report(run, 'claimed', 'auto-claim', NOW + 1);
+  assert.equal(states(run), 'Daniel:claimed Wife:up');
+  assert.equal(Q.up(run).since, NOW + 1, 'the new turn starts now');
+  Q.report(run, 'claimed', 'auto-claim', NOW + 2);
+  assert.equal(run.status, 'finished');
+  assert.equal(run.outcome, 'everyone is done');
 });
 
-test('our turn and already searching -> leave it alone', () => {
-  assert.equal(Q.decide({ enabled: true }, turn(), NOW).action, 'none');
+test('an expired sign-in skips to the next person', () => {
+  const run = startRun();
+  Q.report(run, 'skip', 'their saved sign-in has expired', NOW + 1);
+  assert.equal(states(run), 'Daniel:skipped Wife:up');
+  assert.match(run.order[0].note, /expired/);
 });
 
-test('not our turn -> wait, and a waiting profile is never armed', () => {
-  const d = Q.decide({ enabled: false }, turn({ myTurn: false }), NOW);
-  assert.equal(d.action, 'wait');
-  assert.match(d.why, /Daniel/);
+test('a page problem ends everyone: the window shares one browser', () => {
+  const run = startRun();
+  Q.report(run, 'abort', 'the site served a human-verification check', NOW + 1);
+  assert.equal(states(run), 'Daniel:stopped Wife:not-reached');
+  assert.match(run.outcome, /Daniel's watch stopped: the site served/);
 });
 
-test('searching when the turn has moved on (skipped from the phone) -> disarm', () => {
-  assert.equal(Q.decide({ enabled: true }, turn({ myTurn: false, current: 'Wife' }), NOW).action, 'disarm');
+test('stop and stop time end the queue', () => {
+  const a = startRun();
+  Q.report(a, 'stopped', null, NOW + 1);
+  assert.equal(a.outcome, 'stopped by you');
+  const b = startRun();
+  Q.report(b, 'stop-time', null, NOW + 1);
+  assert.equal(b.outcome, 'reached the stop time');
+  assert.equal(Q.up(b), null);
 });
 
-test('queue over -> disarm if searching, then leave', () => {
-  const done = turn({ status: 'finished', myTurn: false });
-  assert.equal(Q.decide({ enabled: true }, done, NOW).action, 'disarm');
-  assert.equal(Q.decide({ enabled: false }, done, NOW).action, 'leave');
+test('start refuses: no game, a bad stop time, nobody ticked', () => {
+  assert.throws(() => Q.start({ people: PEOPLE, eventUrl: 'https://byutickets.evenue.net/students/events/STFB', stopAt: NOW + HOUR, now: NOW }), /Pick a game/);
+  assert.throws(() => Q.start({ people: PEOPLE, eventUrl: EVENT, stopAt: NOW - 1, now: NOW }), /past/);
+  assert.throws(() => Q.start({ people: PEOPLE, eventUrl: EVENT, stopAt: NOW + 37 * HOUR, now: NOW }), /36 hours/);
+  assert.throws(() => Q.start({ people: [{ id: 'x', name: 'X', on: false }], eventUrl: EVENT, stopAt: NOW + HOUR, now: NOW }), /Nobody/);
 });
 
-test('server unreachable -> carry on as we are, never arm blind', () => {
-  assert.equal(Q.decide({ enabled: false }, null, NOW).action, 'wait');
-  assert.equal(Q.decide({ enabled: true }, null, NOW).action, 'wait');
+test('a found seat holds the turn; an expired hold resumes; a refused checkout aborts', () => {
+  const run = startRun();
+  const since = Q.up(run).since;
+  const held = { enabled: false, seatFoundAt: since + 1000, claimResult: null };
+  assert.equal(Q.holdAction(held, run, since + 5 * 60_000), 'wait');
+  assert.equal(Q.holdAction(held, run, since + 1000 + Q.HOLD_RESUME_MS), 'resume');
+  assert.equal(Q.holdAction({ ...held, claimResult: 'handover' }, run, since + 1000 + Q.HOLD_RESUME_MS), 'resume');
+  assert.equal(Q.holdAction({ ...held, claimResult: 'refused' }, run, since + 2000), 'abort');
+  assert.equal(Q.holdAction({ ...held, claimResult: 'claimed' }, run, since + 2000), 'none');
+  assert.equal(Q.holdAction({ ...held, enabled: true }, run, since + 2000), 'none', 'searching, not holding');
 });
 
-test('a seat held this turn -> wait while the hold lasts', () => {
-  const st = { enabled: false, seatFoundAt: NOW - 5 * 60_000, claimResult: null };
-  assert.equal(Q.decide(st, turn({ turnSince: NOW - 20 * 60_000 }), NOW).action, 'wait');
-});
-
-test('hold ran out with no order -> the turn continues: resume', () => {
-  const st = { enabled: false, seatFoundAt: NOW - Q.HOLD_RESUME_MS - 1, claimResult: 'handover' };
-  assert.equal(Q.decide(st, turn({ turnSince: NOW - 20 * 60_000 }), NOW).action, 'resume');
-});
-
-test('an order placed this turn -> do not search again', () => {
-  const st = { enabled: false, seatFoundAt: NOW - 30_000, claimResult: 'claimed' };
-  assert.equal(Q.decide(st, turn(), NOW).action, 'none');
-});
-
-test('auto-claim refused (fee, card field) -> abort, never re-search into it', () => {
-  const st = { enabled: false, seatFoundAt: NOW - 30_000, claimResult: 'refused' };
-  assert.equal(Q.decide(st, turn(), NOW).action, 'abort');
-});
-
-test('a seat from an EARLIER turn does not count for this one', () => {
-  const st = { enabled: false, seatFoundAt: NOW - 3_600_000, claimResult: 'claimed' };
-  assert.equal(Q.decide(st, turn({ turnSince: NOW - 60_000 }), NOW).action, 'arm');
+test('a seat from before this turn does not count for it', () => {
+  const run = startRun();
+  const st = { enabled: false, seatFoundAt: NOW - HOUR, claimResult: null };
+  assert.equal(Q.holdAction(st, run, NOW + Q.HOLD_RESUME_MS * 2), 'none');
 });
 
 test('stop reasons map to what the queue should do', () => {
@@ -78,14 +96,12 @@ test('stop reasons map to what the queue should do', () => {
     'the price levels are not free': 'abort',
   };
   for (const [reason, kind] of Object.entries(cases)) assert.equal(Q.classifyStop(reason), kind, reason);
-  assert.equal(Q.classifyStop("queue: it is Wife's turn now"), null, 'our own disarm is not a failure');
+  assert.equal(Q.classifyStop('queue: stopped by you'), null, "the queue's own stop is not a turn ending");
 });
 
 test('the stop reasons it classifies are the ones the extension actually writes', () => {
-  // If someone rewords a stoppedReason, a "skip" quietly becomes an "abort"
-  // and ends everyone's queue. Pin the strings to their sources.
-  const fs = require('node:fs');
-  const path = require('node:path');
+  // Reword a stoppedReason and a "skip" quietly becomes an "abort" that ends
+  // everyone's queue. Pin the strings to their sources.
   const src = ['content.js', 'background.js']
     .map((f) => fs.readFileSync(path.join(__dirname, '..', 'extension', f), 'utf8'))
     .join('\n');
@@ -95,18 +111,24 @@ test('the stop reasons it classifies are the ones the extension actually writes'
   }
 });
 
-test('armFields is a full fresh watch', () => {
-  const f = Q.armFields('https://byutickets.evenue.net/students/event/F26/E01#x', NOW + 1, NOW);
-  assert.equal(f.enabled, true);
-  assert.equal(f.targetUrl, 'https://byutickets.evenue.net/students/event/F26/E01');
-  assert.equal(f.strategy, 'probe');
-  assert.equal(f.armedAt, NOW);
-  assert.equal(f.claimBaseline, null);
+test('accounts match by name, case and spacing aside, and never on blanks', () => {
+  assert.ok(Q.sameAccount('Daniel Johnson', ' daniel johnson '));
+  assert.ok(!Q.sameAccount('Daniel Johnson', 'Wife Johnson'));
+  assert.ok(!Q.sameAccount(null, null));
+  assert.ok(!Q.sameAccount('', ''));
 });
 
-test('pushes name the account; order line reads left to right', () => {
+test('armFields is a full fresh watch', () => {
+  const f = Q.armFields(EVENT + '#x', NOW + 1, NOW);
+  assert.equal(f.enabled, true);
+  assert.equal(f.targetUrl, EVENT);
+  assert.equal(f.strategy, 'probe');
+  assert.equal(f.armedAt, NOW);
+});
+
+test('pushes name the account; the order line reads left to right', () => {
   assert.equal(Q.titleFor('Wife', 'ROC SEAT FOUND'), '[Wife] ROC SEAT FOUND');
-  assert.equal(Q.titleFor(null, 'x'), 'x');
-  const line = Q.orderLine({ order: [{ name: 'Daniel', state: 'claimed' }, { name: 'Wife', state: 'up' }, { name: 'Sam', state: 'pending' }] });
-  assert.equal(line, 'Daniel ✓ → Wife (searching) → Sam');
+  const run = startRun();
+  Q.report(run, 'claimed', null, NOW + 1);
+  assert.equal(Q.orderLine(run), 'Daniel ✓ → Wife (searching)');
 });

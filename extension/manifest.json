@@ -1,22 +1,23 @@
 {
   "manifest_version": 3,
   "name": "ROC Claim Watcher",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Watches one BYU ROC event page in your own browser and pushes your phone when a ticket becomes claimable.",
   "permissions": [
     "storage",
     "notifications",
     "tabs",
     "alarms",
-    "sidePanel"
+    "sidePanel",
+    "cookies"
   ],
   "host_permissions": [
     "https://byutickets.evenue.net/*",
+    "https://evenue.net/*",
     "https://ntfy.sh/*",
     "https://api.telegram.org/*",
     "https://discord.com/api/*",
-    "https://discordapp.com/api/*",
-    "http://127.0.0.1/*"
+    "https://discordapp.com/api/*"
   ],
   "content_scripts": [
     {
